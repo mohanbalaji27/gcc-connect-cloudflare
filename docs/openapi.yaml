@@ -1,0 +1,107 @@
+﻿openapi: 3.0.3
+info:
+  title: GCC Connect API
+  version: 0.2.0
+  description: |
+    Cookie-session API. Sign in with POST /api/login, then send the returned `csrfToken` in `X-CSRF-Token`
+    on every non-GET request. Errors are `{ "error": { "code", "message" } }`.
+    Permissions: bookings.manage, events.manage, spaces.manage, teams.manage, qr.manage, users.manage (super_admin has all).
+servers:
+  - url: /api
+paths:
+  /login: { post: { summary: Sign in, security: [] } }
+  /logout: { post: { summary: Sign out } }
+  /session: { get: { summary: Current user and CSRF token (user is null when signed out) } }
+  /me/password: { post: { summary: Change own password (allowed while a temporary password is active) } }
+  /me/summary: { get: { summary: Streak, monthly visits and desks left today } }
+  /health: { get: { summary: Liveness and database check, security: [] } }
+  /resources:
+    get:
+      summary: Search active desks and rooms
+      parameters:
+        - { name: type, in: query, schema: { enum: [desk, room] } }
+        - { name: q, in: query, schema: { type: string, maxLength: 80 } }
+        - { name: startsAt, in: query, schema: { type: string, format: date-time } }
+        - { name: endsAt, in: query, schema: { type: string, format: date-time } }
+  /resources/{id}: { get: { summary: One active space } }
+  /teams: { get: { summary: Teams with seat counts } }
+  /map: { get: { summary: Layout calibration and whether a floor plan exists } }
+  /floor-plan: { get: { summary: Floor plan PDF (signed-in users only, no-store) } }
+  /bookings:
+    get: { summary: My upcoming bookings }
+    post: { summary: Create a booking (requires Idempotency-Key; optional QR token) }
+  /bookings/{id}: { delete: { summary: Cancel (owner, or bookings.manage) } }
+  /events:
+    get: { summary: Upcoming events with RSVP counts }
+    post: { summary: Create an event (events.manage) }
+  /events/{id}:
+    patch: { summary: Edit an event (events.manage) }
+    delete: { summary: Delete an event (events.manage) }
+  /events/{id}/rsvp:
+    put: { summary: I'm going }
+    delete: { summary: Not going }
+  /admin/bookings: { get: { summary: All upcoming bookings (bookings.manage) } }
+  /admin/tokens:
+    get: { summary: Recent booking codes (qr.manage) }
+    post: { summary: "Create a booking code; noExpiry:true or expiresAt; maxRedemptions null = unlimited (qr.manage)" }
+  /admin/tokens/{id}: { delete: { summary: Revoke a booking code (qr.manage) } }
+  /admin/employee-options: { get: { summary: People list for restricting a code (qr.manage or users.manage) } }
+  /admin/resources:
+    get: { summary: All spaces including retired (spaces.manage) }
+    post: { summary: Add a desk or room (spaces.manage) }
+  /admin/resources/{id}:
+    patch: { summary: Edit, move (x/y percent), or reactivate (spaces.manage) }
+    delete: { summary: Retire and cancel upcoming bookings (spaces.manage) }
+  /admin/map/calibration: { put: { summary: Re-lay out seats from the workbook grid (spaces.manage) } }
+  /admin/floor-plan: { put: { summary: Upload the floor-plan PDF, content-type application/pdf, 25 MB max (spaces.manage) } }
+  /admin/inventory/import: { post: { summary: Import seats and teams from the seat JSON (spaces.manage + teams.manage) } }
+  /admin/teams: { post: { summary: Create a team (teams.manage) } }
+  /admin/teams/{id}:
+    patch: { summary: Rename or recolour (teams.manage) }
+    delete: { summary: Delete; seats become unassigned (teams.manage) }
+  /admin/teams/assign: { post: { summary: Assign desks to a team or clear (teams.manage) } }
+  /admin/users:
+    get: { summary: People and permission catalogue (users.manage) }
+    post: { summary: Create a person; returns a one-time temporary password (users.manage) }
+  /admin/users/{id}: { patch: { summary: Change name, team, role, permissions, active (users.manage) } }
+  /admin/users/{id}/reset-password: { post: { summary: Issue a temporary password and end sessions (users.manage) } }
+  /admin/audit: { get: { summary: Recent activity (users.manage) } }
+  /public-config: { get: { summary: App name, tagline, welcome note and default theme (no sign-in needed), security: [] } }
+  /config: { get: { summary: Branding, feature switches and the feature catalogue } }
+  /admin/settings: { put: { summary: Turn features on or off and edit branding (super admin) } }
+  /me/profile: { patch: { summary: Avatar, birthday, and who's-in visibility } }
+  /me/vibes: { get: { summary: Points, level and badges } }
+  /people: { get: { summary: Name directory for pickers } }
+  /links: { get: { summary: Useful links (?manage=1 lets managers read while switched off) } }
+  /contacts: { get: { summary: Important contacts } }
+  /menu: { get: { summary: Food menu from a date for up to 31 days, with likes } }
+  /menu/{id}/like: { post: { summary: Toggle a like } }
+  /announcements: { get: { summary: Active announcements (all=1 for managers) } }
+  /kudos: { get: { summary: Kudos wall and monthly leaders }, post: { summary: Send a kudos } }
+  /kudos/{id}/cheer: { post: { summary: Toggle a cheer } }
+  /kudos/{id}: { delete: { summary: Remove (author or community.manage) } }
+  /polls: { get: { summary: Polls with results and my vote } }
+  /polls/{id}/vote: { post: { summary: Vote or change vote } }
+  /celebrations: { get: { summary: Birthdays and anniversaries in the next 30 days } }
+  /feedback: { post: { summary: Drop a note in the idea box (anonymous by default) } }
+  /whosin: { get: { summary: People with a desk today who have not opted out } }
+  /admin/links: { post: { summary: Add a link (content.manage) } }
+  /admin/links/{id}: { patch: { summary: Edit a link }, delete: { summary: Delete a link } }
+  /admin/contacts: { post: { summary: Add a contact (content.manage) } }
+  /admin/contacts/{id}: { patch: { summary: Edit a contact }, delete: { summary: Delete a contact } }
+  /admin/announcements: { post: { summary: Publish an announcement (content.manage) } }
+  /admin/announcements/{id}: { patch: { summary: Edit }, delete: { summary: Delete } }
+  /admin/menu: { post: { summary: Add a dish to one or more dates (menu.manage) } }
+  /admin/menu/{id}: { delete: { summary: Remove a dish } }
+  /admin/polls: { post: { summary: Create a poll (community.manage) } }
+  /admin/polls/{id}/close: { post: { summary: Close a poll } }
+  /admin/polls/{id}: { delete: { summary: Delete a poll } }
+  /admin/feedback: { get: { summary: Read the idea box (community.manage) } }
+  /admin/feedback/{id}: { patch: { summary: Mark new, seen or done }, delete: { summary: Delete a note } }
+  /admin/insights: { get: { summary: Dashboard numbers (insights.view) } }
+  /admin/roles: { get: { summary: Role templates (super admin) }, post: { summary: Create a role template } }
+  /admin/roles/{id}: { patch: { summary: Edit a role template }, delete: { summary: Delete a role template } }components:
+  securitySchemes:
+    cookie: { type: apiKey, in: cookie, name: gcc_session }
+security:
+  - cookie: []

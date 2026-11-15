@@ -1,0 +1,47 @@
+{
+  "name": "gcc-connect-cloudflare",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20.19"
+  },
+  "scripts": {
+    "dev": "concurrently -k \"node --watch server/index.js\" \"vite\"",
+    "build": "tsc --noEmit && vite build",
+    "start": "node server/index.js",
+    "test": "node --test test/",
+    "test:pg": "node scripts/pg-driver-check.mjs",
+    "db:reset": "node scripts/reset-db.mjs",
+    "map:seats": "node scripts/map-seats-to-plan.mjs",
+    "cf:db": "node scripts/cf-dev-db.mjs",
+    "cf:dev": "npm run build && wrangler dev",
+    "cf:deploy": "npm run build && wrangler deploy",
+    "cf:types": "wrangler types"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "^0.5.10",
+    "@zxing/browser": "^0.1.5",
+    "express": "^5.1.0",
+    "jspdf": "^4.2.1",
+    "pdfjs-dist": "^6.4.299",
+    "pg": "^8.23.1",
+    "qrcode": "^1.5.4",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite-socket": "^0.2.13",
+    "@types/express": "^5.0.3",
+    "@types/node": "^24.3.0",
+    "@types/pg": "^8.23.1",
+    "@types/qrcode": "^1.5.5",
+    "@types/react": "^19.1.12",
+    "@types/react-dom": "^19.1.9",
+    "@vitejs/plugin-react": "^5.0.2",
+    "concurrently": "^9.2.1",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.4",
+    "wrangler": "^4.162.0"
+  }
+}

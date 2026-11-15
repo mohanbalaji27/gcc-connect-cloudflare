@@ -1,0 +1,11 @@
+node_modules/
+local-data/
+dist/
+data/
+.env
+.env.*
+!.env.example
+*.log
+.dev.vars
+.wrangler/
+*.log

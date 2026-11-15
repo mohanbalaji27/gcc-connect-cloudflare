@@ -1,0 +1,37 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "gcc-connect",
+  "main": "worker/index.js",
+  "compatibility_date": "2025-11-01",
+  "compatibility_flags": ["nodejs_compat", "enable_nodejs_http_server_modules"],
+
+  // The React app is served straight from Cloudflare's edge; only /api/* wakes the Worker.
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+
+  "rules": [{ "type": "Text", "globs": ["**/*.sql"], "fallthrough": true }],
+
+  // Hyperdrive pools connections to any PostgreSQL (Neon, Supabase, ...). Create it once:
+  //   npx wrangler hyperdrive create gcc-connect --connection-string "postgres://..."
+  // then paste the id below. Prefer not to use it? Delete this block and set a DATABASE_URL secret instead.
+  "hyperdrive": [
+    {
+      "binding": "HYPERDRIVE",
+      "id": "00000000000000000000000000000000",
+      "localConnectionString": "postgres://postgres:postgres@127.0.0.1:5544/postgres"
+    }
+  ],
+
+  "vars": {
+    "NODE_ENV": "production",
+    "SEED_DEMO": "false",
+    "AUTO_MIGRATE": "true",
+    // scrypt cost for passwords. 8192 keeps logins inside the free plan's CPU budget; raise to 16384 on a paid plan.
+    "PASSWORD_SCRYPT_N": "8192"
+  },
+
+  "observability": { "enabled": true }
+}
