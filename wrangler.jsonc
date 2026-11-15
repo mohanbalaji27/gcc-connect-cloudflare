@@ -33,5 +33,12 @@
     "PASSWORD_SCRYPT_N": "8192"
   },
 
-  "observability": { "enabled": true }
+  "observability": { "enabled": true },
+
+  "routes": [
+    {
+      "pattern": "zb.gccworkspace.com",
+      "custom_domain": true
+    }
+  ]
 }
