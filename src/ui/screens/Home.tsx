@@ -1,5 +1,5 @@
 ﻿import { useEffect, useState } from 'react';
-import type { Announcement, Booking, Celebration, LinkItem, MenuItem, OfficeEvent, Summary, Vibes, WhosIn } from '../../lib/types';
+import type { Announcement, Booking, Celebration, FeatureKey, LinkItem, MenuItem, OfficeEvent, Summary, Vibes, WhosIn } from '../../lib/types';
 import { MEALS } from '../../lib/types';
 import { api } from '../../lib/api';
 import { greeting, inIndia, relativeDay, timeRange, todayInIndia } from '../../lib/format';
@@ -58,9 +58,9 @@ export function HomeScreen({ ctx }: { ctx: Ctx }) {
 
   useEffect(() => {
     let alive = true;
-    const { flag } = ctx;
+    const flag = (key: FeatureKey) => ctx.config.features[key] !== false;
     void Promise.all([
-      api<Summary>('/me/summary'), api<{ bookings: Booking[] }>('/bookings'), api<{ events: OfficeEvent[] }>('/events'),
+      ctx.getSummary(), api<{ bookings: Booking[] }>('/bookings'), api<{ events: OfficeEvent[] }>('/events'),
       flag('announcements') ? quiet(api<{ announcements: Announcement[] }>('/announcements'), { announcements: [] }) : Promise.resolve({ announcements: [] }),
       flag('menu') ? quiet(api<{ items: MenuItem[] }>(`/menu?from=${today}&days=1`), { items: [] }) : Promise.resolve({ items: [] }),
       flag('whosin') ? quiet(api<WhosIn>('/whosin'), null) : Promise.resolve(null),
@@ -72,7 +72,7 @@ export function HomeScreen({ ctx }: { ctx: Ctx }) {
       setSummary(s); setBookings(b.bookings); setEvents(e.events); setNews(n.announcements); setMenu(m.items); setWhos(w); setCelebrations(c.celebrations); setLinks(l.links); setVibes(v);
     }).catch(() => { toast('Some of your dashboard could not load. Pull to refresh in a moment.', 'error'); setBookings([]); });
     return () => { alive = false; };
-  }, [ctx, today, toast]);
+  }, [ctx.config, ctx.getSummary, today, toast]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const free = useCountUp(summary?.desksLeftToday ?? 0);
   const streak = useCountUp(summary?.streak ?? 0);

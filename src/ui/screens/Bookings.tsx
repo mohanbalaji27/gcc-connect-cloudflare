@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { Booking } from '../../lib/types';
 import { api, messageOf } from '../../lib/api';
+import { applyLocalBooking } from '../../lib/availability';
 import { downloadCalendarFile, inIndia, relativeDay, timeRange } from '../../lib/format';
 import type { Ctx } from '../App';
 import { Empty, Icon, Modal, Spinner, useKit } from '../kit';
@@ -21,10 +22,13 @@ export function BookingsScreen({ ctx }: { ctx: Ctx }) {
     setBusy(true);
     try {
       await api(`/bookings/${encodeURIComponent(cancelling.id)}`, { method: 'DELETE' });
+      // The map frees the space straight away when you go back to Book.
+      applyLocalBooking(cancelling.resource_id, cancelling.starts_at, cancelling.ends_at, true, undefined, false);
+      ctx.invalidateSummary();
       toast(`${cancelling.label} released. Someone else will be glad of it!`, 'success');
       setCancelling(null);
       await load();
-    } catch (reason) { toast(messageOf(reason), 'error'); } finally { setBusy(false); }
+    } catch (reason) { toast(messageOf(reason), 'error'); setCancelling(null); await load(); } finally { setBusy(false); }
   }
 
   return (

@@ -14,6 +14,12 @@ export const FEATURE_KEYS = {
   vibes: 'Points, levels and badges',
 };
 export const DEFAULT_FEATURES = Object.fromEntries(Object.keys(FEATURE_KEYS).map((key) => [key, true]));
+// Extra on/off options (super admin). Stored together under the "options" settings key.
+export const OPTION_KEYS = {
+  showBookerNames: 'Show who booked a seat or room in availability details',
+  eventsRsvpEnabled: 'Let people tap “I’m going” on events',
+};
+export const DEFAULT_OPTIONS = { showBookerNames: false, eventsRsvpEnabled: true };
 export const ACCENTS = ['green', 'ocean', 'sunset', 'berry', 'mono'];
 export const DEFAULT_BRANDING = { appName: 'GCC Connect', tagline: 'Your office day, sorted.', accent: 'green', welcome: '' };
 export const KUDOS_BADGES = ['star', 'team', 'idea', 'fire', 'helper', 'coffee'];
@@ -45,10 +51,15 @@ export function registerFeatures({ app, db, requireAuth, requireSignedIn, requir
   };
 
   async function readSettings() {
-    const rows = (await db.query("SELECT key, value FROM app_settings WHERE key IN ('features', 'branding')")).rows;
+    const rows = (await db.query("SELECT key, value, now() AS read_at FROM app_settings WHERE key IN ('features', 'branding', 'options')")).rows;
     const stored = Object.fromEntries(rows.map((row) => [row.key, row.value]));
-    return { features: { ...DEFAULT_FEATURES, ...(stored.features ?? {}) }, branding: { ...DEFAULT_BRANDING, ...(stored.branding ?? {}) } };
+    return {
+      features: { ...DEFAULT_FEATURES, ...(stored.features ?? {}) },
+      branding: { ...DEFAULT_BRANDING, ...(stored.branding ?? {}) },
+      options: { ...DEFAULT_OPTIONS, ...(stored.options ?? {}) },
+    };
   }
+  const readConfig = async () => ({ ...(await readSettings()), featureCatalog: FEATURE_KEYS, optionCatalog: OPTION_KEYS, accents: ACCENTS });
   // Managers can still read the area they run while it is switched off (GET with ?manage=1) so they can prepare content.
   const MANAGE_BYPASS = { links: 'content.manage', contacts: 'content.manage', announcements: 'content.manage', menu: 'menu.manage', polls: 'community.manage' };
   const feature = (name) => async (req, _res, next) => {
@@ -68,7 +79,7 @@ export function registerFeatures({ app, db, requireAuth, requireSignedIn, requir
   });
 
   app.get('/api/config', requireSignedIn, async (_req, res) => {
-    res.json({ ...(await readSettings()), featureCatalog: FEATURE_KEYS, accents: ACCENTS });
+    res.json(await readConfig());
   });
 
   app.put('/api/admin/settings', requireSuper, requireCsrf, async (req, res) => {
@@ -79,6 +90,14 @@ export function registerFeatures({ app, db, requireAuth, requireSignedIn, requir
       for (const [key, value] of Object.entries(req.body.features)) {
         if (!(key in FEATURE_KEYS) || typeof value !== 'boolean') throw fail(400, 'INVALID_SETTINGS', `Unknown feature “${key}”.`);
         features[key] = value;
+      }
+    }
+    const options = { ...current.options };
+    if (req.body?.options !== undefined) {
+      if (typeof req.body.options !== 'object' || req.body.options === null) throw fail(400, 'INVALID_SETTINGS', 'Options must be on/off switches.');
+      for (const [key, value] of Object.entries(req.body.options)) {
+        if (!(key in OPTION_KEYS) || typeof value !== 'boolean') throw fail(400, 'INVALID_SETTINGS', `Unknown option “${key}”.`);
+        options[key] = value;
       }
     }
     const branding = { ...current.branding };
@@ -92,12 +111,15 @@ export function registerFeatures({ app, db, requireAuth, requireSignedIn, requir
         branding.accent = input.accent;
       }
     }
-    await db.tx(async (tx) => {
+    const version = await db.tx(async (tx) => {
       await tx.query("INSERT INTO app_settings (key, value) VALUES ('features', $1) ON CONFLICT (key) DO UPDATE SET value = excluded.value", [JSON.stringify(features)]);
       await tx.query("INSERT INTO app_settings (key, value) VALUES ('branding', $1) ON CONFLICT (key) DO UPDATE SET value = excluded.value", [JSON.stringify(branding)]);
-      await audit(tx, req.user.id, 'settings.updated', null, Object.entries(features).filter(([, on]) => !on).map(([key]) => key).join(',') || 'all features on');
+      await tx.query("INSERT INTO app_settings (key, value) VALUES ('options', $1) ON CONFLICT (key) DO UPDATE SET value = excluded.value", [JSON.stringify(options)]);
+      // The audit call also bumps the config version, which is what tells every open tab to reload its settings.
+      return audit(tx, req.user.id, 'settings.updated', null, Object.entries(features).filter(([, on]) => !on).map(([key]) => key).join(',') || 'all features on');
     });
-    res.json({ features, branding });
+    res.set('X-Config-Version', String(version));
+    res.json({ features, branding, options, configVersion: version });
   });
 
   // ---------- My profile ----------
@@ -587,4 +609,6 @@ export function registerFeatures({ app, db, requireAuth, requireSignedIn, requir
     await audit(db, req.user.id, 'role.deleted', req.params.id, result.rows[0].name);
     res.status(204).end();
   });
+
+  return { readSettings, readConfig };
 }

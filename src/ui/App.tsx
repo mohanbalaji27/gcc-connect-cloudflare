@@ -1,6 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { AppConfig, Branding, FeatureKey, MapInfo, Team, User } from '../lib/types';
-import { api, ApiError, messageOf, setCsrf } from '../lib/api';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { AppConfig, Bootstrap, Branding, FeatureKey, MapInfo, Summary, Team, User } from '../lib/types';
+import { api, ApiError, messageOf, onConfigVersion, setCsrf } from '../lib/api';
+import { startPulse } from '../lib/pulse';
+import { clearAvailability } from '../lib/availability';
+import { clearResources } from '../lib/resources';
 import { applyTheme } from '../lib/theme';
 import { reloadFloorPlan, resetFloorPlan, type FloorPlanImage } from '../lib/floorplan';
 import { Avatar, Icon, KitProvider, Spinner, useKit, Field } from './kit';
@@ -24,8 +27,12 @@ const DEFAULT_BRANDING: Branding = { appName: 'GCC Connect', tagline: 'Your offi
 export interface Ctx {
   user: User;
   config: AppConfig;
+  /** Changes whenever an admin edits settings, teams, spaces or the map (see GET /api/pulse). */
+  configVersion: number;
   flag: (key: FeatureKey) => boolean;
   reloadConfig: () => Promise<void>;
+  getSummary: () => Promise<Summary>;
+  invalidateSummary: () => void;
   updateUser: (user: User) => void;
   plan: FloorPlanImage | null;
   planLoading: boolean;
@@ -54,22 +61,56 @@ function Shell() {
   const [updateReady, setUpdateReady] = useState(false);
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [branding, setBranding] = useState<Branding>(DEFAULT_BRANDING);
+  const [configVersion, setConfigVersion] = useState(0);
+  const knownVersion = useRef(0);
+  const loadingBootstrap = useRef<Promise<void> | null>(null);
+  const planVersion = useRef<number | null>(null);
+  const slices = useRef<Record<string, string>>({});
+  const summaryCache = useRef<{ value: Summary; at: number } | null>(null);
 
-  const reloadTeams = useCallback(async () => {
-    const result = await api<{ teams: Team[]; unassignedSeats: number }>('/teams');
-    setTeams(result.teams);
-    setUnassignedSeats(result.unassignedSeats);
-  }, []);
-  const reloadMap = useCallback(async () => { setMapInfo(await api<MapInfo>('/map')); }, []);
-  const reloadConfig = useCallback(async () => {
-    const next = await api<AppConfig>('/config');
-    setConfig(next);
-    setBranding(next.branding);
-  }, []);
   const reloadPlan = useCallback(async () => {
     setPlanLoading(true);
     try { setPlan(await reloadFloorPlan()); } finally { setPlanLoading(false); }
   }, []);
+
+  // Each part of the bootstrap only replaces its state when it really changed, so a routine refresh does not re-render
+  // (or re-fetch) screens that have nothing new to show.
+  const applyBootstrap = useCallback((boot: Bootstrap) => {
+    const slice = <T,>(key: string, value: T, set: (next: T) => void) => {
+      const raw = JSON.stringify(value);
+      if (slices.current[key] === raw) return;
+      slices.current[key] = raw;
+      set(value);
+    };
+    knownVersion.current = boot.configVersion;
+    setConfigVersion(boot.configVersion);
+    slice('user', boot.user, setUser);
+    slice('config', boot.config, (next) => { setConfig(next); setBranding(next.branding); });
+    slice('teams', { teams: boot.teams, unassigned: boot.unassignedSeats }, (next) => { setTeams(next.teams); setUnassignedSeats(next.unassigned); });
+    slice('map', boot.map, setMapInfo);
+    summaryCache.current = { value: boot.summary, at: Date.now() };
+    if (boot.map.floorPlanAvailable && planVersion.current !== boot.map.floorPlanVersion) {
+      planVersion.current = boot.map.floorPlanVersion;
+      void reloadPlan();
+    }
+  }, [reloadPlan]);
+
+  // One call brings settings, teams, map info and the summary. Calls made while one is running share its result.
+  const reloadBootstrap = useCallback((): Promise<void> => {
+    if (loadingBootstrap.current) return loadingBootstrap.current;
+    const run = api<Bootstrap>('/bootstrap').then(applyBootstrap).finally(() => { loadingBootstrap.current = null; });
+    loadingBootstrap.current = run;
+    return run;
+  }, [applyBootstrap]);
+
+  const getSummary = useCallback(async () => {
+    const cached = summaryCache.current;
+    if (cached && Date.now() - cached.at < 120_000) return cached.value;
+    const value = await api<Summary>('/me/summary');
+    summaryCache.current = { value, at: Date.now() };
+    return value;
+  }, []);
+  const invalidateSummary = useCallback(() => { if (summaryCache.current) summaryCache.current.at = 0; }, []);
 
   useEffect(() => {
     api<{ user: User | null; csrfToken?: string }>('/session')
@@ -108,20 +149,38 @@ function Shell() {
 
   const ready = Boolean(user && !user.mustChangePassword);
   useEffect(() => {
-    if (!ready) return;
-    void reloadTeams().catch(() => {});
-    void reloadMap().catch(() => {});
-    void reloadConfig().catch(() => {
-      setConfig((current) => current ?? { features: { links: true, contacts: true, menu: true, announcements: true, kudos: true, polls: true, celebrations: true, feedback: true, whosin: true, vibes: true }, branding: DEFAULT_BRANDING, featureCatalog: {} as AppConfig['featureCatalog'], accents: ['green', 'ocean', 'sunset', 'berry', 'mono'] });
+    if (!ready) return undefined;
+    void reloadBootstrap().catch(() => {
+      setConfig((current) => current ?? { features: { links: true, contacts: true, menu: true, announcements: true, kudos: true, polls: true, celebrations: true, feedback: true, whosin: true, vibes: true }, branding: DEFAULT_BRANDING, options: { showBookerNames: false, eventsRsvpEnabled: true }, featureCatalog: {} as AppConfig['featureCatalog'], optionCatalog: {} as AppConfig['optionCatalog'], accents: ['green', 'ocean', 'sunset', 'berry', 'mono'] });
     });
-    void reloadPlan();
-  }, [ready, reloadTeams, reloadMap, reloadConfig, reloadPlan]);
+    // Any response that reports a newer settings version, and the periodic pulse, both end up here.
+    const noticed = (version: number) => { if (knownVersion.current > 0 && version !== knownVersion.current) void reloadBootstrap().catch(() => {}); };
+    onConfigVersion(noticed);
+    const stopPulse = startPulse({ onPulse: (reply) => noticed(reply.configVersion) });
+    return () => { onConfigVersion(null); stopPulse(); };
+  }, [ready, reloadBootstrap]);
+
+  const resetSession = useCallback(() => {
+    setCsrf('');
+    resetFloorPlan();
+    clearAvailability();
+    clearResources();
+    slices.current = {};
+    knownVersion.current = 0;
+    planVersion.current = null;
+    summaryCache.current = null;
+    setPlan(null);
+    setTeams([]);
+    setConfig(null);
+    setConfigVersion(0);
+    setUser(null);
+  }, []);
 
   useEffect(() => {
-    const expired = () => { setCsrf(''); resetFloorPlan(); setPlan(null); setConfig(null); setUser(null); toast('Your session ended. Please sign in again.', 'info'); };
+    const expired = () => { resetSession(); toast('Your session ended. Please sign in again.', 'info'); };
     window.addEventListener('gcc-auth-expired', expired);
     return () => window.removeEventListener('gcc-auth-expired', expired);
-  }, [toast]);
+  }, [toast, resetSession]);
 
   const handleQrParams = useCallback(async () => {
     const params = new URLSearchParams(location.search);
@@ -142,20 +201,15 @@ function Shell() {
 
   async function signOut() {
     try { await api('/logout', { method: 'POST' }); } catch (reason) { if (!(reason instanceof ApiError) || reason.status !== 401) toast(messageOf(reason), 'error'); }
-    setCsrf('');
-    resetFloorPlan();
-    setPlan(null);
-    setTeams([]);
-    setConfig(null);
-    setUser(null);
+    resetSession();
     setScreen('home');
   }
 
   const ctx: Ctx | null = useMemo(
     () => (user && ready && config
-      ? { user, config, flag: (key: FeatureKey) => config.features[key] !== false, reloadConfig, updateUser: setUser, plan, planLoading, teams, unassignedSeats, mapInfo, reloadTeams, reloadMap, reloadPlan, go, startBooking }
+      ? { user, config, configVersion, flag: (key: FeatureKey) => config.features[key] !== false, reloadConfig: reloadBootstrap, getSummary, invalidateSummary, updateUser: setUser, plan, planLoading, teams, unassignedSeats, mapInfo, reloadTeams: reloadBootstrap, reloadMap: reloadBootstrap, reloadPlan, go, startBooking }
       : null),
-    [user, ready, config, plan, planLoading, teams, unassignedSeats, mapInfo, reloadTeams, reloadMap, reloadConfig, reloadPlan, go, startBooking],
+    [user, ready, config, configVersion, plan, planLoading, teams, unassignedSeats, mapInfo, reloadBootstrap, getSummary, invalidateSummary, reloadPlan, go, startBooking],
   );
 
   if (booting) return <div className="boot"><Spinner label="Warming up" /></div>;

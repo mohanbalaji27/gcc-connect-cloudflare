@@ -11,7 +11,7 @@ export interface TeamRef { id: string; name: string; color: string }
 export interface Resource {
   id: string; type: 'desk' | 'room'; label: string; building: string; floor: string; zone: string;
   description: string; amenities: string[]; capacity: number | null;
-  x: number | null; y: number | null; gridRow: number | null; gridCol: number | null;
+  x: number | null; y: number | null; gridRow: number | null; gridCol: number | null; labelSide: 'top' | 'bottom' | 'left' | 'right' | null;
   team: TeamRef | null; active: boolean; available: boolean | null; bookedBy?: string;
 }
 export interface Booking {
@@ -31,7 +31,7 @@ export interface ManagedUser {
   id: string; email: string; name: string; team: string; role: Role; active: boolean; permissions: Permission[];
   ownPermissions: Permission[]; customRoleId: string | null; joinedOn: string;
 }
-export interface MapInfo { calibration: { x0: number; y0: number; x1: number; y1: number }; floorPlanAvailable: boolean }
+export interface MapInfo { calibration: { x0: number; y0: number; x1: number; y1: number }; floorPlanAvailable: boolean; floorPlanVersion: number }
 export interface TokenRow {
   id: string; expires_at: string | null; max_redemptions: number | null; redemption_count: number;
   revoked: boolean; created_at: string; label: string; type: string;
@@ -55,7 +55,11 @@ export const EVENT_CATEGORIES = ['Learning', 'Community', 'Company', 'Social', '
 
 export type FeatureKey = 'links' | 'contacts' | 'menu' | 'announcements' | 'kudos' | 'polls' | 'celebrations' | 'feedback' | 'whosin' | 'vibes';
 export interface Branding { appName: string; tagline: string; accent: string; welcome: string }
-export interface AppConfig { features: Record<FeatureKey, boolean>; branding: Branding; featureCatalog: Record<FeatureKey, string>; accents: string[] }
+export type OptionKey = 'showBookerNames' | 'eventsRsvpEnabled';
+export interface AppConfig { features: Record<FeatureKey, boolean>; branding: Branding; options: Record<OptionKey, boolean>; featureCatalog: Record<FeatureKey, string>; optionCatalog: Record<OptionKey, string>; accents: string[] }
+export interface Bootstrap {
+  configVersion: number; user: User; config: AppConfig; teams: Team[]; unassignedSeats: number; map: MapInfo; summary: Summary;
+}
 export interface LinkItem { id: string; title: string; url: string; description: string; category: string; emoji: string; sort_order: number }
 export interface ContactItem { id: string; name: string; role_title: string; category: string; phone: string; email: string; hours: string; notes: string; emoji: string; sort_order: number }
 export interface MenuItem { id: string; date: string; meal: 'breakfast' | 'lunch' | 'snacks' | 'dinner'; name: string; description: string; diet: 'veg' | 'non-veg' | 'vegan' | 'egg'; emoji: string; likes: number; liked: boolean }

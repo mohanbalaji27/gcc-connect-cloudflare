@@ -14,6 +14,9 @@ paths:
   /session: { get: { summary: Current user and CSRF token (user is null when signed out) } }
   /me/password: { post: { summary: Change own password (allowed while a temporary password is active) } }
   /me/summary: { get: { summary: Streak, monthly visits and desks left today } }
+  /bootstrap: { get: { summary: "Everything the app needs after sign-in in one call: configVersion, user, config (features, branding, options), teams, map info (incl. floorPlanVersion) and the summary. Sends an ETag, so repeat calls are cheap 304s" } }
+  /pulse: { get: { summary: "Tiny heartbeat: { configVersion, serverTime }. configVersion goes up whenever settings, branding, teams, spaces or the map change; clients reload /bootstrap when it differs. Every API response also carries it in the X-Config-Version header. Later features add fields here" } }
+  /availability: { get: { summary: "Busy intervals for one office day (?date=YYYY-MM-DD, Asia/Kolkata): { date, showNames, busy: { spaceId: [[fromMinute, toMinute, mine(0|1), name?]] } }. Names only when the showBookerNames option is on or the caller has bookings.manage. ETag, private" } }
   /health: { get: { summary: Liveness and database check, security: [] } }
   /resources:
     get:
@@ -30,7 +33,7 @@ paths:
   /bookings:
     get: { summary: My upcoming bookings }
     post: { summary: Create a booking (requires Idempotency-Key; optional QR token) }
-  /bookings/{id}: { delete: { summary: Cancel (owner, or bookings.manage) } }
+  /bookings/{id}: { delete: { summary: Cancel (owner, or bookings.manage). Bookings that already ended answer 409 BOOKING_ENDED } }
   /events:
     get: { summary: Upcoming events with RSVP counts }
     post: { summary: Create an event (events.manage) }
@@ -68,7 +71,7 @@ paths:
   /admin/audit: { get: { summary: Recent activity (users.manage) } }
   /public-config: { get: { summary: App name, tagline, welcome note and default theme (no sign-in needed), security: [] } }
   /config: { get: { summary: Branding, feature switches and the feature catalogue } }
-  /admin/settings: { put: { summary: Turn features on or off and edit branding (super admin) } }
+  /admin/settings: { put: { summary: "Turn features on or off, edit branding and options { showBookerNames, eventsRsvpEnabled } (super admin). Bumps the config version" } }
   /me/profile: { patch: { summary: Avatar, birthday, and who's-in visibility } }
   /me/vibes: { get: { summary: Points, level and badges } }
   /people: { get: { summary: Name directory for pickers } }

@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { get as httpGet } from 'node:http';
 import { openDatabase } from '../server/db.js';
 import { createApp } from '../server/app.js';
 
@@ -519,7 +520,7 @@ test('map layout saves moves and team changes in one batch, and logs it', async 
   assert.equal((await call(ava, 'PUT', '/admin/map/layout', body)).status, 403);
   assert.equal((await call(noah, 'PUT', '/admin/map/layout', { moves: [{ id: desks[0].id, x: 500, y: 1 }] })).status, 400);
   const saved = await (await call(noah, 'PUT', '/admin/map/layout', body)).json();
-  assert.deepEqual(saved, { moved: 1, assigned: 2 });
+  assert.deepEqual(saved, { moved: 1, assigned: 2, relabelled: 0 });
   const after = (await (await call(noah, 'GET', `/resources/${desks[0].id}`)).json()).resource;
   assert.equal(after.x, 11.5);
   assert.equal(after.team.id, team.id);
@@ -542,4 +543,215 @@ test('activity log and bookings export as safe CSV for the right people', async 
   assert.ok(text.includes('"\'=HYPERLINK'));
   assert.equal((await call(noah, 'GET', '/admin/bookings/export')).status, 200);
   assert.equal((await call(ava, 'GET', '/admin/bookings/export')).status, 403);
+});
+
+// ---------- Bootstrap, pulse and config version ----------
+const getRaw = (session, path, headers = {}) => {
+  // node:http, not fetch: fetch adds "Cache-Control: no-cache" to conditional requests, which (correctly) defeats a 304.
+  if (!headers['If-None-Match']) return fetch(`${baseUrl}/api${path}`, { headers: { Cookie: session.cookie, ...headers } });
+  return new Promise((resolve, reject) => {
+    httpGet(`${baseUrl}/api${path}`, { headers: { Cookie: session.cookie, ...headers } }, (res) => { res.resume(); res.on('end', () => resolve({ status: res.statusCode })); }).on('error', reject);
+  });
+};
+const officeDay = (offsetDays) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date(Date.now() + offsetDays * 86_400_000));
+
+test('bootstrap returns everything the app needs after sign-in in one call, with an ETag', async () => {
+  assert.equal((await fetch(`${baseUrl}/api/bootstrap`)).status, 401);
+  const ava = await signIn();
+  const response = await getRaw(ava, '/bootstrap');
+  assert.equal(response.status, 200);
+  const boot = await response.json();
+  assert.equal(boot.user.email, 'ava@demo.gcc');
+  assert.equal(typeof boot.configVersion, 'number');
+  assert.equal(boot.config.features.kudos, true);
+  assert.equal(boot.config.options.eventsRsvpEnabled, true);
+  assert.equal(boot.config.options.showBookerNames, false);
+  assert.ok(Array.isArray(boot.teams));
+  assert.equal(typeof boot.unassignedSeats, 'number');
+  assert.equal(boot.map.floorPlanAvailable, true);
+  assert.equal(typeof boot.summary.desksTotal, 'number');
+  const etag = response.headers.get('etag');
+  assert.ok(etag);
+  assert.match(response.headers.get('cache-control'), /private/);
+  assert.equal((await getRaw(ava, '/bootstrap', { 'If-None-Match': etag })).status, 304);
+});
+
+test('pulse is cheap, needs a session, and the config version moves when settings change (kudos wall off and on)', async () => {
+  assert.equal((await fetch(`${baseUrl}/api/pulse`)).status, 401);
+  const [ava, root] = await Promise.all([signIn(), signIn('root@demo.gcc')]);
+  const before = await (await getRaw(ava, '/pulse')).json();
+  assert.equal(typeof before.configVersion, 'number');
+  assert.equal((await (await getRaw(ava, '/bootstrap')).json()).config.features.kudos, true);
+  assert.equal((await getRaw(ava, '/kudos')).status, 200);
+
+  const off = await call(root, 'PUT', '/admin/settings', { features: { kudos: false } });
+  assert.equal(off.status, 200);
+  const offBody = await off.json();
+  assert.ok(offBody.configVersion > before.configVersion);
+  assert.equal(off.headers.get('x-config-version'), String(offBody.configVersion));
+
+  // Another person sees the new version on their very next pulse, and the new flags after reloading bootstrap.
+  const during = await getRaw(ava, '/pulse');
+  assert.equal((await during.json()).configVersion, offBody.configVersion);
+  assert.equal(during.headers.get('x-config-version'), String(offBody.configVersion));
+  assert.equal((await (await getRaw(ava, '/bootstrap')).json()).config.features.kudos, false);
+  assert.equal((await getRaw(ava, '/kudos')).status, 404);
+
+  const on = await (await call(root, 'PUT', '/admin/settings', { features: { kudos: true } })).json();
+  assert.ok(on.configVersion > offBody.configVersion);
+  assert.equal((await (await getRaw(ava, '/pulse')).json()).configVersion, on.configVersion);
+  assert.equal((await (await getRaw(ava, '/bootstrap')).json()).config.features.kudos, true);
+  assert.equal((await getRaw(ava, '/kudos')).status, 200);
+});
+
+test('teams, spaces and the map also bump the config version; plain bookings do not', async () => {
+  const [ava, noah] = await Promise.all([signIn(), signIn('noah@demo.gcc')]);
+  const version = async () => (await (await getRaw(ava, '/pulse')).json()).configVersion;
+  const start = await version();
+  await book(ava, 'room-cabin-2', 50);
+  assert.equal(await version(), start);
+  await call(noah, 'POST', '/admin/teams', { name: 'Version bump team', color: '#abcdef' });
+  assert.ok(await version() > start);
+});
+
+test('super admin options: RSVP can be switched off for events and booker names switched on for availability', async () => {
+  const [ava, sam, noah, root] = await Promise.all([signIn(), signIn('sam@demo.gcc'), signIn('noah@demo.gcc'), signIn('root@demo.gcc')]);
+  assert.equal((await call(noah, 'PUT', '/admin/settings', { options: { eventsRsvpEnabled: false } })).status, 403);
+  assert.equal((await call(root, 'PUT', '/admin/settings', { options: { nope: true } })).status, 400);
+  const created = await (await call(noah, 'POST', '/events', { title: 'RSVP test', venue: 'Cafe', category: 'Social', ...futureWindow(80) })).json();
+  assert.equal((await call(ava, 'PUT', `/events/${created.id}/rsvp`)).status, 204);
+  try {
+    assert.equal((await call(root, 'PUT', '/admin/settings', { options: { eventsRsvpEnabled: false } })).status, 200);
+    assert.equal((await call(sam, 'PUT', `/events/${created.id}/rsvp`)).status, 403);
+    assert.equal((await call(ava, 'DELETE', `/events/${created.id}/rsvp`)).status, 403);
+    const listed = await (await call(ava, 'GET', '/events')).json();
+    const mine = listed.events.find((event) => event.id === created.id);
+    assert.equal(listed.rsvpEnabled, false);
+    assert.equal(mine.going, false);
+    assert.equal(mine.going_count, 0);
+  } finally {
+    await call(root, 'PUT', '/admin/settings', { options: { eventsRsvpEnabled: true } });
+  }
+  assert.equal((await call(sam, 'PUT', `/events/${created.id}/rsvp`)).status, 204);
+  assert.equal((await (await call(sam, 'GET', '/events')).json()).events.find((event) => event.id === created.id).going_count, 2);
+});
+
+// ---------- Availability ----------
+test('availability returns compact busy intervals per space, with a private ETag and no names by default', async () => {
+  const [ava, sam, noah, root] = await Promise.all([signIn(), signIn('sam@demo.gcc'), signIn('noah@demo.gcc'), signIn('root@demo.gcc')]);
+  const day = officeDay(2);
+  assert.equal((await fetch(`${baseUrl}/api/availability?date=${day}`)).status, 401);
+  for (const bad of ['', '?date=nope', '?date=2020-01-01', '?date=2099-01-01', '?date=2026-02-30']) assert.equal((await getRaw(ava, `/availability${bad}`)).status, 400, bad);
+
+  const make = (session, resourceId, from, to) => call(session, 'POST', '/bookings', { resourceId, startsAt: `${day}T${from}:00+05:30`, endsAt: `${day}T${to}:00+05:30` }, { 'Idempotency-Key': randomUUID() });
+  assert.equal((await make(ava, 'room-cabin-1', '09:00', '10:30')).status, 201);
+  assert.equal((await make(sam, 'room-cabin-1', '14:00', '15:00')).status, 201);
+
+  const response = await getRaw(sam, `/availability?date=${day}`);
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get('cache-control'), /private/);
+  const body = await response.json();
+  assert.equal(body.date, day);
+  assert.equal(body.showNames, false);
+  assert.deepEqual(body.busy['room-cabin-1'], [[540, 630, 0], [840, 900, 1]]);
+  assert.equal(body.busy['room-cabin-2'], undefined);
+  assert.equal((await getRaw(sam, `/availability?date=${day}`, { 'If-None-Match': response.headers.get('etag') })).status, 304);
+
+  // Managers always see names; everyone does when a super admin allows it.
+  assert.equal((await (await getRaw(noah, `/availability?date=${day}`)).json()).busy['room-cabin-1'][0][3], 'Ava Chen');
+  try {
+    await call(root, 'PUT', '/admin/settings', { options: { showBookerNames: true } });
+    const named = await (await getRaw(sam, `/availability?date=${day}`)).json();
+    assert.equal(named.showNames, true);
+    assert.equal(named.busy['room-cabin-1'][0][3], 'Ava Chen');
+  } finally {
+    await call(root, 'PUT', '/admin/settings', { options: { showBookerNames: false } });
+  }
+
+  await call(ava, 'DELETE', `/bookings/${(await (await call(ava, 'GET', '/bookings')).json()).bookings[0].id}`);
+  assert.deepEqual((await (await getRaw(sam, `/availability?date=${day}`)).json()).busy['room-cabin-1'], [[840, 900, 1]]);
+});
+
+test('a booking that runs past midnight shows up on both days, clipped to each', async () => {
+  const ava = await signIn();
+  const day = officeDay(3);
+  const next = officeDay(4);
+  const made = await call(ava, 'POST', '/bookings', { resourceId: 'room-collab-2', startsAt: `${day}T22:00:00+05:30`, endsAt: `${next}T02:00:00+05:30` }, { 'Idempotency-Key': randomUUID() });
+  assert.equal(made.status, 201);
+  assert.deepEqual((await (await getRaw(ava, `/availability?date=${day}`)).json()).busy['room-collab-2'], [[1320, 1440, 1]]);
+  assert.deepEqual((await (await getRaw(ava, `/availability?date=${next}`)).json()).busy['room-collab-2'], [[0, 120, 1]]);
+});
+
+// ---------- Booking logic audit ----------
+test('bookings that already ended cannot be cancelled, and cancelling twice is a clean 404', async () => {
+  const [ava, noah] = await Promise.all([signIn(), signIn('noah@demo.gcc')]);
+  await db.query("INSERT INTO bookings (id, employee_id, resource_id, starts_at, ends_at) VALUES ('old-booking', $1, 'room-meeting-a', now() - interval '3 hours', now() - interval '2 hours')", [ava.user.id]);
+  const ended = await call(ava, 'DELETE', '/bookings/old-booking');
+  assert.equal(ended.status, 409);
+  assert.equal((await ended.json()).error.code, 'BOOKING_ENDED');
+  assert.equal((await call(noah, 'DELETE', '/bookings/old-booking')).status, 409);
+  const made = await (await book(ava, 'room-meeting-b', 26)).json();
+  const [one, two] = await Promise.all([call(ava, 'DELETE', `/bookings/${made.booking.id}`), call(noah, 'DELETE', `/bookings/${made.booking.id}`)]);
+  assert.deepEqual([one.status, two.status].sort(), [204, 404]);
+  const logged = await db.query("SELECT COUNT(*)::int AS count FROM audit_log WHERE action = 'booking.cancelled' AND entity_id = $1", [made.booking.id]);
+  assert.equal(logged.rows[0].count, 1);
+});
+
+test('replaying an idempotency key after the booking was cancelled does not pretend it is still booked', async () => {
+  const ava = await signIn();
+  const key = randomUUID();
+  const body = { resourceId: 'room-meeting-c', ...futureWindow(28) };
+  const first = await (await call(ava, 'POST', '/bookings', body, { 'Idempotency-Key': key })).json();
+  assert.equal((await call(ava, 'DELETE', `/bookings/${first.booking.id}`)).status, 204);
+  const replay = await call(ava, 'POST', '/bookings', body, { 'Idempotency-Key': key });
+  assert.equal(replay.status, 409);
+  assert.equal((await replay.json()).error.code, 'BOOKING_CANCELLED');
+  assert.equal((await call(ava, 'POST', '/bookings', body, { 'Idempotency-Key': randomUUID() })).status, 201);
+});
+
+test('the booking quota also counts a booking that is in progress right now', async () => {
+  const ava = await signIn();
+  for (const [index, room] of ['room-meeting-a', 'room-meeting-b', 'room-meeting-c'].entries()) {
+    await db.query("INSERT INTO bookings (id, employee_id, resource_id, starts_at, ends_at) VALUES ($1, $2, $3, now() - interval '10 minutes', now() + interval '50 minutes')", [`live-${index}`, ava.user.id, room]);
+  }
+  const blocked = await book(ava, 'room-cabin-1', 24);
+  assert.equal(blocked.status, 409);
+  assert.equal((await blocked.json()).error.code, 'BOOKING_QUOTA');
+});
+
+test('a single-use QR can only be redeemed once even when two people scan it at the same moment', async () => {
+  const [noah, ava, sam] = await Promise.all([signIn('noah@demo.gcc'), signIn(), signIn('sam@demo.gcc')]);
+  const { token } = await (await call(noah, 'POST', '/admin/tokens', { resourceId: 'room-collab-3', expiresAt: new Date(Date.now() + 86_400_000).toISOString(), maxRedemptions: 1 })).json();
+  const results = await Promise.all([book(ava, 'room-collab-3', 24, token), book(sam, 'room-collab-3', 30, token)]);
+  assert.deepEqual(results.map((response) => response.status).sort(), [201, 403]);
+  const row = (await db.query("SELECT redemption_count FROM booking_tokens WHERE max_redemptions = 1 AND resource_id = 'room-collab-3' ORDER BY created_at DESC LIMIT 1")).rows[0];
+  assert.equal(row.redemption_count, 1);
+});
+
+test('retiring a space cancels its bookings, and the space disappears from availability and cannot be booked', async () => {
+  const [noah, ava] = await Promise.all([signIn('noah@demo.gcc'), signIn()]);
+  const created = await (await call(noah, 'POST', '/admin/resources', { type: 'room', label: 'Retire me room', capacity: 4 })).json();
+  const made = await (await book(ava, created.id, 24)).json();
+  assert.ok(made.booking.id);
+  assert.equal((await call(noah, 'DELETE', `/admin/resources/${created.id}`)).status, 204);
+  assert.equal((await book(ava, created.id, 48)).status, 404);
+  const day = officeDay(1);
+  assert.equal((await (await getRaw(ava, `/availability?date=${day}`)).json()).busy[created.id], undefined);
+  assert.equal((await (await call(ava, 'GET', '/bookings')).json()).bookings.some((row) => row.resource_id === created.id), false);
+});
+
+test('seat label placement can be set per seat or in a batch, and only from the allowed sides', async () => {
+  const [noah, ava] = await Promise.all([signIn('noah@demo.gcc'), signIn()]);
+  const desks = (await (await call(noah, 'GET', '/resources?type=desk')).json()).resources.slice(0, 2);
+  assert.equal(desks[0].labelSide, null);
+  assert.equal((await call(noah, 'PATCH', `/admin/resources/${desks[0].id}`, { labelSide: 'diagonal' })).status, 400);
+  assert.equal((await call(noah, 'PATCH', `/admin/resources/${desks[0].id}`, { labelSide: 'left' })).status, 204);
+  assert.equal((await (await call(ava, 'GET', `/resources/${desks[0].id}`)).json()).resource.labelSide, 'left');
+  assert.equal((await call(ava, 'PUT', '/admin/map/layout', { labels: [{ id: desks[1].id, side: 'top' }] })).status, 403);
+  assert.equal((await call(noah, 'PUT', '/admin/map/layout', { labels: [{ id: desks[1].id, side: 'sideways' }] })).status, 400);
+  const saved = await (await call(noah, 'PUT', '/admin/map/layout', { labels: [{ id: desks[0].id, side: null }, { id: desks[1].id, side: 'top' }] })).json();
+  assert.equal(saved.relabelled, 2);
+  const after = (await (await call(noah, 'GET', '/resources?type=desk')).json()).resources;
+  assert.equal(after.find((r) => r.id === desks[0].id).labelSide, null);
+  assert.equal(after.find((r) => r.id === desks[1].id).labelSide, 'top');
 });

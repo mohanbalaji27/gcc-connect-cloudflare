@@ -2,8 +2,9 @@ import { useCallback, useEffect, useState } from 'react';
 import { EVENT_CATEGORIES, type OfficeEvent } from '../../lib/types';
 import { api, messageOf } from '../../lib/api';
 import { dateKeyInIndia, inIndia, timeKeyInIndia, timeRange, toInstant, todayInIndia } from '../../lib/format';
+import { normalizeUrl, urlProblem } from '../../lib/url';
 import type { Ctx } from '../App';
-import { Empty, ExternalLink, Field, Icon, Modal, Spinner, useKit } from '../kit';
+import { Empty, ExternalLink, Field, Icon, Modal, Spinner, UrlInput, useKit } from '../kit';
 
 const CATEGORY_TONE: Record<string, string> = { Learning: 'blue', Community: 'green', Company: 'lilac', Social: 'orange', Wellness: 'teal', Team: 'pink' };
 
@@ -14,6 +15,7 @@ export function EventsScreen({ ctx }: { ctx: Ctx }) {
   const [deleting, setDeleting] = useState<OfficeEvent | null>(null);
   const [filter, setFilter] = useState('All');
   const canManage = ctx.user.permissions.includes('events.manage');
+  const rsvpOn = ctx.config.options.eventsRsvpEnabled;
 
   const load = useCallback(async () => {
     try { setEvents((await api<{ events: OfficeEvent[] }>('/events')).events); } catch (reason) { toast(messageOf(reason), 'error'); setEvents([]); }
@@ -60,13 +62,15 @@ export function EventsScreen({ ctx }: { ctx: Ctx }) {
                 <li><Icon name="calendar" size={15} /> {inIndia(event.starts_at, { weekday: 'long' })}</li>
                 <li><Icon name="clock" size={15} /> {timeRange(event.starts_at, event.ends_at)}</li>
                 <li><Icon name="pin" size={15} /> {event.venue}</li>
-                <li><Icon name="users" size={15} /> {event.going_count} going · {event.audience}</li>
+                <li><Icon name="users" size={15} /> {rsvpOn ? `${event.going_count} going · ` : ''}{event.audience}</li>
               </ul>
               {event.links.length > 0 && <div className="event-links">{event.links.map((link) => <ExternalLink key={link.url + link.label} href={link.url}><Icon name="link" size={14} /> {link.label}</ExternalLink>)}</div>}
               <div className="event-actions">
-                <button className={`button ${event.going ? 'button-primary' : ''}`} aria-pressed={event.going} onClick={() => void toggle(event)}>
-                  <Icon name={event.going ? 'check' : 'heart'} size={18} /> {event.going ? 'You’re going' : 'I’m going'}
-                </button>
+                {rsvpOn && (
+                  <button className={`button ${event.going ? 'button-primary' : ''}`} aria-pressed={event.going} onClick={() => void toggle(event)}>
+                    <Icon name={event.going ? 'check' : 'heart'} size={18} /> {event.going ? 'You’re going' : 'I’m going'}
+                  </button>
+                )}
                 {canManage && <>
                   <button className="icon-button" aria-label={`Edit ${event.title}`} onClick={() => setEditing(event)}><Icon name="edit" /></button>
                   <button className="icon-button danger" aria-label={`Delete ${event.title}`} onClick={() => setDeleting(event)}><Icon name="trash" /></button>
@@ -107,9 +111,12 @@ function EventForm({ event, onClose, onSaved }: { event: OfficeEvent | null; onC
     const startsAt = toInstant(date, start);
     const endsAt = toInstant(date, end);
     if (endsAt <= startsAt) return setError('The event needs to end after it starts.');
+    const cleanLinks = links.filter((link) => link.label.trim() || link.url.trim()).map((link) => ({ label: link.label.trim(), url: normalizeUrl(link.url) }));
+    const badLink = cleanLinks.map((link) => urlProblem(link.url) ?? (link.url ? null : 'Each link needs a web address.')).find(Boolean);
+    if (badLink) return setError(badLink);
     setBusy(true);
     try {
-      const body = { title, category, venue, audience, description, startsAt: startsAt.toISOString(), endsAt: endsAt.toISOString(), links: links.filter((link) => link.label.trim() || link.url.trim()) };
+      const body = { title, category, venue, audience, description, startsAt: startsAt.toISOString(), endsAt: endsAt.toISOString(), links: cleanLinks };
       if (event) await api(`/events/${event.id}`, { method: 'PATCH', body });
       else await api('/events', { method: 'POST', body });
       toast(event ? 'Event updated.' : 'Event created — time to spread the word!', 'success');
@@ -132,7 +139,7 @@ function EventForm({ event, onClose, onSaved }: { event: OfficeEvent | null; onC
           {links.map((link, index) => (
             <div key={index} className="link-row">
               <input value={link.label} onChange={(e) => setLinks(links.map((l, i) => i === index ? { ...l, label: e.target.value } : l))} placeholder="Label" maxLength={60} aria-label="Link label" />
-              <input value={link.url} onChange={(e) => setLinks(links.map((l, i) => i === index ? { ...l, url: e.target.value } : l))} placeholder="https://…" maxLength={500} aria-label="Link address" />
+              <UrlInput value={link.url} onChange={(value) => setLinks(links.map((l, i) => i === index ? { ...l, url: value } : l))} ariaLabel="Link address" />
               <button type="button" className="icon-button danger" aria-label="Remove link" onClick={() => setLinks(links.filter((_, i) => i !== index))}><Icon name="trash" size={15} /></button>
             </div>
           ))}

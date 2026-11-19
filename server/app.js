@@ -9,11 +9,13 @@ import {
 import { gridPlacement, validCalibration, DEFAULT_CALIBRATION } from './layout.js';
 import { importInventory } from './inventory.js';
 import { registerFeatures } from './features.js';
+import { bumpConfigVersion } from './config-version.js';
 
 const SESSION_DURATION_MS = 8 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const OFFICE_TZ = 'Asia/Kolkata';
 const EVENT_CATEGORIES = ['Learning', 'Community', 'Company', 'Social', 'Wellness', 'Team'];
+const LABEL_SIDES = ['top', 'bottom', 'left', 'right'];
 const rateBuckets = new Map();
 
 const sameSecret = (a, b) => {
@@ -63,14 +65,16 @@ function publicResource(row, available = null, extra = {}) {
   return {
     id: row.id, type: row.type, label: row.label, building: row.building, floor: row.floor,
     zone: row.zone, description: row.description, amenities: row.amenities, capacity: row.capacity,
-    x: row.x_pct, y: row.y_pct, gridRow: row.grid_row, gridCol: row.grid_col,
+    x: row.x_pct, y: row.y_pct, gridRow: row.grid_row, gridCol: row.grid_col, labelSide: row.label_side ?? null,
     team: row.team_id ? { id: row.team_id, name: row.team_name, color: row.team_color } : null,
     active: row.active, available, ...extra,
   };
 }
 
+// now() is selected on purpose in the reads that clients cache and re-fetch right after a change (here, settings, teams, map,
+// availability): a query that calls now() is never cached by Cloudflare Hyperdrive, so a reload always sees the latest data.
 const RESOURCE_SELECT = `
-  SELECT r.*, t.name AS team_name, t.color AS team_color
+  SELECT r.*, t.name AS team_name, t.color AS team_color, now() AS read_at
   FROM resources r LEFT JOIN teams t ON t.id = r.team_id`;
 
 export function createApp(db, options = {}) {
@@ -91,8 +95,13 @@ export function createApp(db, options = {}) {
 
   const sessionCookie = (token, maxAge) =>
     `gcc_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge};${options.secureCookies ? ' Secure;' : ''}`;
-  const audit = (client, actorId, action, entityId = null, detail = '') =>
-    client.query('INSERT INTO audit_log (id, actor_id, action, entity_id, detail) VALUES ($1,$2,$3,$4,$5)', [randomUUID(), actorId, action, entityId, String(detail).slice(0, 300)]);
+  // Anything that changes what browsers cache (settings, teams, map, floor plan, spaces) also bumps the config version,
+  // so the audit call itself is the single place that keeps clients in sync.
+  const CONFIG_ACTIONS = /^(settings|resource|team|map|floor-plan|inventory)\./;
+  const audit = async (client, actorId, action, entityId = null, detail = '') => {
+    await client.query('INSERT INTO audit_log (id, actor_id, action, entity_id, detail) VALUES ($1,$2,$3,$4,$5)', [randomUUID(), actorId, action, entityId, String(detail).slice(0, 300)]);
+    return CONFIG_ACTIONS.test(action) ? bumpConfigVersion(client) : null;
+  };
   const userView = (row) => ({
     id: row.id, email: row.email, name: row.name, team: row.team, role: row.role,
     permissions: effectivePermissions(row), mustChangePassword: row.must_change_password,
@@ -107,13 +116,17 @@ export function createApp(db, options = {}) {
       try { decoded = decodeURIComponent(token); } catch { decoded = ''; }
       const { rows } = await db.query(`
         SELECT s.csrf_token, e.id, e.email, e.name, e.team, e.role, e.permissions, e.must_change_password,
-               e.avatar, e.show_in_whosin, e.birth_month, e.birth_day, COALESCE(cr.permissions, '{}') AS role_permissions, cr.name AS role_name
+               e.avatar, e.show_in_whosin, e.birth_month, e.birth_day, COALESCE(cr.permissions, '{}') AS role_permissions, cr.name AS role_name,
+               (SELECT value FROM app_settings WHERE key = 'config_version') AS config_version
         FROM sessions s JOIN employees e ON e.id = s.employee_id LEFT JOIN custom_roles cr ON cr.id = e.custom_role_id
         WHERE s.token_hash = $1 AND s.expires_at > now() AND e.active = TRUE`, [sha256(decoded)]);
       if (rows[0]) {
         req.user = userView(rows[0]);
         req.csrfToken = rows[0].csrf_token;
         req.sessionHash = sha256(decoded);
+        req.configVersion = Number(rows[0].config_version ?? 0);
+        // Every response tells the browser the current settings version, so a change is noticed on the very next call.
+        res.set('X-Config-Version', String(req.configVersion));
       }
     }
     next();
@@ -163,6 +176,7 @@ export function createApp(db, options = {}) {
     const sessionToken = randomBytes(32).toString('base64url');
     const csrfToken = randomBytes(24).toString('base64url');
     await db.query('DELETE FROM sessions WHERE expires_at < now()');
+    await db.query("DELETE FROM idempotency WHERE created_at < now() - interval '3 days'");
     await db.query('INSERT INTO sessions (token_hash, employee_id, csrf_token, expires_at) VALUES ($1,$2,$3,$4)', [sha256(sessionToken), employee.id, csrfToken, new Date(Date.now() + SESSION_DURATION_MS)]);
     res.set('Set-Cookie', sessionCookie(sessionToken, SESSION_DURATION_MS / 1000));
     res.json({ user: userView(employee), csrfToken });
@@ -195,8 +209,8 @@ export function createApp(db, options = {}) {
     res.status(204).end();
   });
 
-  app.get('/api/me/summary', requireAuth, async (req, res) => {
-    const past = await db.query("SELECT starts_at FROM bookings WHERE employee_id = $1 AND status = 'confirmed' AND starts_at <= now() ORDER BY starts_at DESC LIMIT 400", [req.user.id]);
+  const loadSummary = async (user) => {
+    const past = await db.query("SELECT starts_at FROM bookings WHERE employee_id = $1 AND status = 'confirmed' AND starts_at <= now() ORDER BY starts_at DESC LIMIT 400", [user.id]);
     const days = new Set(past.rows.map((row) => officeDateKey(new Date(row.starts_at))));
     let cursor = new Date();
     const isWeekend = (date) => ['Sat', 'Sun'].includes(new Intl.DateTimeFormat('en', { timeZone: OFFICE_TZ, weekday: 'short' }).format(date));
@@ -219,7 +233,20 @@ export function createApp(db, options = {}) {
              (SELECT COUNT(DISTINCT b.resource_id)::int FROM bookings b JOIN resources r ON r.id = b.resource_id
                WHERE r.type = 'desk' AND r.active = TRUE AND b.status = 'confirmed' AND b.starts_at < $2 AND b.ends_at > $1) AS desks_booked`,
     [dayStart, new Date(dayStart.getTime() + DAY_MS)])).rows[0];
-    res.json({ streak, monthCount, totalVisits: days.size, desksTotal: totals.desks_total, desksLeftToday: Math.max(0, totals.desks_total - totals.desks_booked) });
+    return { streak, monthCount, totalVisits: days.size, desksTotal: totals.desks_total, desksLeftToday: Math.max(0, totals.desks_total - totals.desks_booked) };
+  };
+  app.get('/api/me/summary', requireAuth, async (req, res) => res.json(await loadSummary(req.user)));
+
+  // Pulse: the cheapest possible "has anything changed?" call. Features add small fields through pulse.add(name, fn);
+  // keep each one to a single indexed query (or none), because every open browser tab calls this every few minutes.
+  const pulseProviders = new Map();
+  const pulse = { add: (name, provider) => pulseProviders.set(name, provider) };
+  app.locals.pulse = pulse;
+  app.get('/api/pulse', requireAuth, async (req, res) => {
+    if (!limit(`pulse:${req.user.id}`, 60, 60_000)) throw fail(429, 'RATE_LIMITED', 'Slow down a little.');
+    const body = { configVersion: req.configVersion, serverTime: new Date().toISOString() };
+    for (const [name, provider] of pulseProviders) body[name] = await provider(req);
+    res.json(body);
   });
 
   // ---------- Spaces ----------
@@ -245,6 +272,7 @@ export function createApp(db, options = {}) {
         WHERE b.status = 'confirmed' AND b.starts_at < $2 AND b.ends_at > $1`, [new Date(startsAt), new Date(endsAt)]);
       busy = new Map(conflicts.rows.map((row) => [row.resource_id, manager ? row.name : true]));
     }
+    if (!startsAt) res.set('Cache-Control', 'private, no-cache');
     res.json({
       resources: rows.map((row) => publicResource(row, startsAt ? !busy.has(row.id) : null, typeof busy.get(row.id) === 'string' ? { bookedBy: busy.get(row.id) } : {})),
     });
@@ -256,21 +284,28 @@ export function createApp(db, options = {}) {
     res.json({ resource: publicResource(rows[0]) });
   });
 
-  app.get('/api/teams', requireAuth, async (_req, res) => {
+  const loadTeams = async () => {
     const { rows } = await db.query(`
-      SELECT t.id, t.name, t.color, t.sort_order,
+      SELECT t.id, t.name, t.color, t.sort_order, now() AS read_at,
              (SELECT COUNT(*)::int FROM resources r WHERE r.team_id = t.id AND r.active = TRUE AND r.type = 'desk') AS seat_count
       FROM teams t ORDER BY t.sort_order, t.name`);
-    const unassigned = (await db.query("SELECT COUNT(*)::int AS count FROM resources WHERE team_id IS NULL AND active = TRUE AND type = 'desk'")).rows[0].count;
-    res.json({ teams: rows.map((row) => ({ id: row.id, name: row.name, color: row.color, seatCount: row.seat_count })), unassignedSeats: unassigned });
-  });
+    const unassigned = (await db.query("SELECT COUNT(*)::int AS count, now() AS read_at FROM resources WHERE team_id IS NULL AND active = TRUE AND type = 'desk'")).rows[0].count;
+    return { teams: rows.map((row) => ({ id: row.id, name: row.name, color: row.color, seatCount: row.seat_count })), unassignedSeats: unassigned };
+  };
+  app.get('/api/teams', requireAuth, async (_req, res) => res.json(await loadTeams()));
 
-  app.get('/api/map', requireAuth, async (_req, res) => {
-    const setting = (await db.query("SELECT value FROM app_settings WHERE key = 'calibration'")).rows[0];
-    const stored = (await db.query("SELECT 1 FROM app_files WHERE key = 'floor-plan'")).rows[0];
+  // floorPlanVersion changes whenever a new PDF is uploaded, so clients only re-download the (large) plan when needed.
+  const loadMapInfo = async () => {
+    const setting = (await db.query("SELECT value, now() AS read_at FROM app_settings WHERE key = 'calibration'")).rows[0];
+    const stored = (await db.query("SELECT updated_at, now() AS read_at FROM app_files WHERE key = 'floor-plan'")).rows[0];
     const planPath = options.floorPlanPath ?? resolve(process.cwd(), 'local-data/floor-plan.pdf');
-    res.json({ calibration: setting?.value ?? DEFAULT_CALIBRATION, floorPlanAvailable: Boolean(stored) || existsSync(planPath) });
-  });
+    return {
+      calibration: setting?.value ?? DEFAULT_CALIBRATION,
+      floorPlanAvailable: Boolean(stored) || existsSync(planPath),
+      floorPlanVersion: stored ? new Date(stored.updated_at).getTime() : 0,
+    };
+  };
+  app.get('/api/map', requireAuth, async (_req, res) => res.json(await loadMapInfo()));
 
   // ---------- Bookings ----------
   app.get('/api/bookings', requireAuth, async (req, res) => {
@@ -311,7 +346,9 @@ export function createApp(db, options = {}) {
       const prior = (await tx.query('SELECT request_hash, booking_id FROM idempotency WHERE employee_id = $1 AND key = $2', [req.user.id, idempotencyKey])).rows[0];
       if (prior) {
         if (prior.request_hash !== payloadHash) throw fail(409, 'IDEMPOTENCY_MISMATCH', 'This request key was already used for a different booking.');
-        return { booking: (await tx.query('SELECT * FROM bookings WHERE id = $1', [prior.booking_id])).rows[0], duplicate: true };
+        const original = (await tx.query('SELECT * FROM bookings WHERE id = $1', [prior.booking_id])).rows[0];
+        if (original?.status !== 'confirmed') throw fail(409, 'BOOKING_CANCELLED', 'That booking was cancelled. Start a new booking to try again.');
+        return { booking: original, duplicate: true };
       }
       const resource = (await tx.query('SELECT * FROM resources WHERE id = $1 AND active = TRUE FOR UPDATE', [resourceId])).rows[0];
       if (!resource) throw fail(404, 'RESOURCE_NOT_FOUND', 'This space is unavailable.');
@@ -331,7 +368,7 @@ export function createApp(db, options = {}) {
           if (used) throw fail(409, 'TOKEN_REDEEMED', 'You have already used this booking QR.');
         }
       }
-      const upcoming = (await tx.query("SELECT COUNT(*)::int AS count FROM bookings WHERE employee_id = $1 AND status = 'confirmed' AND starts_at > now()", [req.user.id])).rows[0].count;
+      const upcoming = (await tx.query("SELECT COUNT(*)::int AS count FROM bookings WHERE employee_id = $1 AND status = 'confirmed' AND ends_at > now()", [req.user.id])).rows[0].count;
       if (upcoming >= 3) throw fail(409, 'BOOKING_QUOTA', 'You have reached the limit of three upcoming bookings.');
       if (resource.type === 'desk') {
         const own = (await tx.query(`
@@ -359,14 +396,48 @@ export function createApp(db, options = {}) {
   });
 
   app.delete('/api/bookings/:id', requireAuth, requireCsrf, async (req, res) => {
-    const booking = (await db.query("SELECT id, employee_id FROM bookings WHERE id = $1 AND status = 'confirmed'", [req.params.id])).rows[0];
+    const booking = (await db.query("SELECT id, employee_id, ends_at FROM bookings WHERE id = $1 AND status = 'confirmed'", [req.params.id])).rows[0];
     if (!booking) throw fail(404, 'BOOKING_NOT_FOUND', 'This booking is no longer available.');
     if (booking.employee_id !== req.user.id && !req.user.permissions.includes('bookings.manage')) throw fail(403, 'NOT_BOOKING_OWNER', 'You can only cancel your own bookings.');
+    if (new Date(booking.ends_at).getTime() <= Date.now()) throw fail(409, 'BOOKING_ENDED', 'That booking is already over, so it stays in the history.');
     await db.tx(async (tx) => {
-      await tx.query("UPDATE bookings SET status = 'cancelled' WHERE id = $1", [booking.id]);
+      // The status guard makes a double tap (or two admins) cancel and log exactly once.
+      const cancelled = await tx.query("UPDATE bookings SET status = 'cancelled' WHERE id = $1 AND status = 'confirmed' RETURNING id", [booking.id]);
+      if (!cancelled.rows.length) throw fail(404, 'BOOKING_NOT_FOUND', 'This booking is no longer available.');
       await audit(tx, req.user.id, 'booking.cancelled', booking.id, booking.employee_id === req.user.id ? 'own booking' : 'cancelled by manager');
     });
     res.status(204).end();
+  });
+
+  // ---------- Availability ----------
+  // One compact answer per office day: the confirmed busy intervals (minutes after local midnight) for every space that has
+  // any. Browsers keep it in memory and work out free/booked for any arrival time and stay without asking again.
+  let readSettings = async () => ({ options: {} });
+  const validDay = (value) => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`)) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
+  app.get('/api/availability', requireAuth, async (req, res) => {
+    if (!limit(`availability:${req.user.id}`, 120, 60_000)) throw fail(429, 'RATE_LIMITED', 'Please pause before checking again.');
+    const date = req.query.date;
+    if (!validDay(date) || date < officeDateKey(new Date(Date.now() - DAY_MS)) || date > officeDateKey(new Date(Date.now() + 62 * DAY_MS))) {
+      throw fail(400, 'INVALID_DATE', 'Choose a date within the next 60 days.');
+    }
+    const dayStart = new Date(`${date}T00:00:00+05:30`);
+    const dayEnd = new Date(dayStart.getTime() + DAY_MS);
+    const { options: settings } = await readSettings();
+    const showNames = settings.showBookerNames === true || req.user.permissions.includes('bookings.manage');
+    const { rows } = await db.query(`
+      SELECT b.resource_id, b.starts_at, b.ends_at, b.employee_id, now() AS read_at${showNames ? ', e.name' : ''}
+      FROM bookings b ${showNames ? 'JOIN employees e ON e.id = b.employee_id' : ''}
+      WHERE b.status = 'confirmed' AND b.starts_at < $2 AND b.ends_at > $1
+      ORDER BY b.resource_id, b.starts_at LIMIT 3000`, [dayStart, dayEnd]);
+    const busy = {};
+    for (const row of rows) {
+      const from = Math.max(0, Math.round((new Date(row.starts_at).getTime() - dayStart.getTime()) / 60_000));
+      const to = Math.min(1440, Math.round((new Date(row.ends_at).getTime() - dayStart.getTime()) / 60_000));
+      if (to <= from) continue;
+      (busy[row.resource_id] ??= []).push(showNames ? [from, to, row.employee_id === req.user.id ? 1 : 0, row.name] : [from, to, row.employee_id === req.user.id ? 1 : 0]);
+    }
+    res.set('Cache-Control', 'private, no-cache');
+    res.json({ date, showNames, busy });
   });
 
   // ---------- Events ----------
@@ -389,13 +460,15 @@ export function createApp(db, options = {}) {
     if (end - start > 14 * DAY_MS) throw fail(400, 'INVALID_TIME', 'Events can last at most 14 days.');
   };
 
+  const rsvpsOn = async () => (await readSettings()).options.eventsRsvpEnabled !== false;
   app.get('/api/events', requireAuth, async (req, res) => {
+    const showRsvp = await rsvpsOn();
     const { rows } = await db.query(`
       SELECT ev.id, ev.title, ev.description, ev.starts_at, ev.ends_at, ev.venue, ev.category, ev.audience, ev.links,
              (SELECT COUNT(*)::int FROM event_rsvps r WHERE r.event_id = ev.id) AS going_count,
              EXISTS (SELECT 1 FROM event_rsvps r WHERE r.event_id = ev.id AND r.employee_id = $1) AS going
       FROM events ev WHERE ev.ends_at >= now() ORDER BY ev.starts_at LIMIT 100`, [req.user.id]);
-    res.json({ events: rows.map((row) => ({ ...row, going_count: row.going_count, going: Boolean(row.going) })) });
+    res.json({ rsvpEnabled: showRsvp, events: rows.map((row) => ({ ...row, going_count: showRsvp ? row.going_count : 0, going: showRsvp && Boolean(row.going) })) });
   });
 
   app.post('/api/events', requirePermission('events.manage'), requireCsrf, async (req, res) => {
@@ -440,6 +513,7 @@ export function createApp(db, options = {}) {
   });
 
   app.put('/api/events/:id/rsvp', requireAuth, requireCsrf, async (req, res) => {
+    if (!(await rsvpsOn())) throw fail(403, 'RSVP_DISABLED', 'RSVPs are turned off for events.');
     const event = (await db.query('SELECT id FROM events WHERE id = $1 AND ends_at >= now()', [req.params.id])).rows[0];
     if (!event) throw fail(404, 'EVENT_NOT_FOUND', 'This event is no longer open.');
     await db.query('INSERT INTO event_rsvps (event_id, employee_id) VALUES ($1,$2) ON CONFLICT DO NOTHING', [event.id, req.user.id]);
@@ -447,6 +521,7 @@ export function createApp(db, options = {}) {
   });
 
   app.delete('/api/events/:id/rsvp', requireAuth, requireCsrf, async (req, res) => {
+    if (!(await rsvpsOn())) throw fail(403, 'RSVP_DISABLED', 'RSVPs are turned off for events.');
     await db.query('DELETE FROM event_rsvps WHERE event_id = $1 AND employee_id = $2', [req.params.id, req.user.id]);
     res.status(204).end();
   });
@@ -537,6 +612,10 @@ export function createApp(db, options = {}) {
     if (body?.active !== undefined) {
       if (typeof body.active !== 'boolean') throw fail(400, 'INVALID_INPUT', 'Active must be true or false.');
       fields.active = body.active;
+    }
+    if (body?.labelSide !== undefined) {
+      if (body.labelSide !== null && !LABEL_SIDES.includes(body.labelSide)) throw fail(400, 'INVALID_INPUT', 'Choose top, bottom, left, right or automatic for the label.');
+      fields.label_side = body.labelSide;
     }
     return fields;
   };
@@ -680,19 +759,26 @@ export function createApp(db, options = {}) {
   app.put('/api/admin/map/layout', requireAnyPermissions('spaces.manage', 'teams.manage'), requireCsrf, async (req, res) => {
     const moves = req.body?.moves ?? [];
     const assignments = req.body?.assignments ?? [];
-    if (!Array.isArray(moves) || !Array.isArray(assignments) || moves.length > 600 || assignments.length > 100) throw fail(400, 'INVALID_INPUT', 'That is too many changes to save at once.');
-    if (moves.length && !req.user.permissions.includes('spaces.manage')) throw fail(403, 'PERMISSION_REQUIRED', 'Moving seats needs the space management permission.');
+    const labels = req.body?.labels ?? [];
+    if (!Array.isArray(moves) || !Array.isArray(assignments) || !Array.isArray(labels) || moves.length > 600 || assignments.length > 100 || labels.length > 600) throw fail(400, 'INVALID_INPUT', 'That is too many changes to save at once.');
+    if ((moves.length || labels.length) && !req.user.permissions.includes('spaces.manage')) throw fail(403, 'PERMISSION_REQUIRED', 'Moving seats needs the space management permission.');
     if (assignments.length && !req.user.permissions.includes('teams.manage')) throw fail(403, 'PERMISSION_REQUIRED', 'Changing teams needs the team management permission.');
     for (const move of moves) {
       if (typeof move?.id !== 'string' || move.id.length > 64) throw fail(400, 'INVALID_INPUT', 'A seat in the list is not valid.');
       percent(move.x, 'Horizontal position'); percent(move.y, 'Vertical position');
+    }
+    for (const label of labels) {
+      if (typeof label?.id !== 'string' || label.id.length > 64 || (label.side !== null && !LABEL_SIDES.includes(label.side))) throw fail(400, 'INVALID_INPUT', 'A label setting is not valid.');
     }
     for (const item of assignments) {
       if (!Array.isArray(item?.resourceIds) || item.resourceIds.length > 600 || item.resourceIds.some((id) => typeof id !== 'string' || id.length > 64)) throw fail(400, 'INVALID_INPUT', 'A team change is not valid.');
       if (item.teamId !== null && typeof item.teamId !== 'string') throw fail(400, 'INVALID_INPUT', 'A team change is not valid.');
     }
     const result = await db.tx(async (tx) => {
-      let moved = 0; let assigned = 0;
+      let moved = 0; let assigned = 0; let relabelled = 0;
+      for (const label of labels) {
+        relabelled += (await tx.query('UPDATE resources SET label_side = $2 WHERE id = $1 AND active = TRUE RETURNING id', [label.id, label.side])).rows.length;
+      }
       for (const move of moves) {
         const done = await tx.query('UPDATE resources SET x_pct = $2, y_pct = $3, placed_manually = TRUE WHERE id = $1 AND active = TRUE RETURNING id', [move.id, percent(move.x, 'x'), percent(move.y, 'y')]);
         moved += done.rows.length;
@@ -706,8 +792,8 @@ export function createApp(db, options = {}) {
         const done = await tx.query("UPDATE resources SET team_id = $1, zone = $2 WHERE id = ANY($3::text[]) AND type = 'desk' AND active = TRUE RETURNING id", [team?.id ?? null, team?.name ?? '', item.resourceIds]);
         assigned += done.rows.length;
       }
-      await audit(tx, req.user.id, 'map.saved', null, `${moved} seats moved, ${assigned} team assignments`);
-      return { moved, assigned };
+      await audit(tx, req.user.id, 'map.saved', null, `${moved} seats moved, ${assigned} team assignments, ${relabelled} labels`);
+      return { moved, assigned, relabelled };
     });
     res.json(result);
   });
@@ -910,7 +996,15 @@ export function createApp(db, options = {}) {
     res.json({ ok: true });
   });
 
-  registerFeatures({ app, db, requireAuth, requireSignedIn, requireCsrf, requirePermission, requireAnyPermissions, audit, fail, text, limit, isoDate, userView });
+  const features = registerFeatures({ app, db, requireAuth, requireSignedIn, requireCsrf, requirePermission, requireAnyPermissions, audit, fail, text, limit, isoDate, userView });
+  readSettings = features.readSettings;
+
+  // Everything the app needs right after sign-in, in one request. The ETag makes repeat calls a cheap 304.
+  app.get('/api/bootstrap', requireAuth, async (req, res) => {
+    const [config, teams, map, summary] = await Promise.all([features.readConfig(), loadTeams(), loadMapInfo(), loadSummary(req.user)]);
+    res.set('Cache-Control', 'private, no-cache');
+    res.json({ configVersion: req.configVersion, user: req.user, config, ...teams, map, summary });
+  });
 
   app.use('/api', (_req, _res, next) => next(fail(404, 'NOT_FOUND', 'This API route does not exist.')));
   const buildDirectory = resolve(process.cwd(), 'dist');

@@ -65,10 +65,12 @@ Open http://localhost:8787. Put `SEED_DEMO=true` (demo people and sample data) a
 - **Rate limits are per Worker instance, not global**, so they slow abuse but do not strictly cap it. For strict limits use Cloudflare's rate limiting rules in front of `/api/login`.
 - **Uploaded floor plan** is stored in the database (25 MB request cap in the API; Workers allow 100 MB bodies). Keep it small on a free database.
 - Hyperdrive on the free plan has a daily query quota; the Worker reuses one connection per request to stay well below it.
+- **Turn Hyperdrive query caching off** (recommended): `npx wrangler hyperdrive update <id> --caching-disabled`. Hyperdrive otherwise may serve a cached copy of a read for up to a minute, which would delay a settings change or a fresh booking. The reads that matter (settings, teams, map, spaces, availability) already select `now()`, which also keeps them out of that cache, but disabling caching is the simplest guarantee.
+- **Request budget:** every open, visible tab sends one tiny `GET /api/pulse` when it comes back to the front and then every 3 minutes (about 20 an hour; nothing while hidden). With ~200 people that is a few tens of thousands of calls a day at most, inside the 100,000/day free quota. Opening the app is one `GET /api/bootstrap`, and each day's availability on the Book screen is one cached `GET /api/availability?date=`.
 
 ## What changed versus the Node edition
 
-- `worker/index.js` hosts the same Express app through `httpServerHandler` and applies the migrations bundled as text.
+- `worker/index.js` hosts the same Express app through `httpServerHandler` and applies the migrations bundled as text. The list of migrations is **generated** into `worker/migrations.generated.js` from `server/migrations/*.sql` (`npm run migrations:gen`, which `cf:dev` and `cf:deploy` run for you), and a test fails if that file is out of date or a migration number is skipped, so a new migration can never be forgotten.
 - `worker/pg-edge-adapter.js` opens one PostgreSQL connection per request (transactions run on it, with other queries of that request held back until commit).
 - `server/db.js` was split: `server/setup.js` holds migrations and seeding and is shared by both editions.
 - Password hashes now carry their scrypt cost (`salt:hash:N`); old `salt:hash` values still verify.

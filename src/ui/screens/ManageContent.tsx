@@ -2,7 +2,8 @@
 import type { Announcement, ContactItem, LinkItem } from '../../lib/types';
 import { api, messageOf } from '../../lib/api';
 import { inIndia } from '../../lib/format';
-import { Empty, Field, Icon, Modal, Spinner, Switch, Tabs, useKit } from '../kit';
+import { normalizeUrl, urlProblem } from '../../lib/url';
+import { Empty, Field, Icon, Modal, Spinner, Switch, Tabs, UrlInput, useKit } from '../kit';
 
 type Sub = 'links' | 'contacts' | 'news';
 
@@ -55,7 +56,7 @@ function Links() {
 
 function LinkForm({ item, onClose, onSaved }: { item: LinkItem | null; onClose: () => void; onSaved: () => void }) {
   const [title, setTitle] = useState(item?.title ?? '');
-  const [url, setUrl] = useState(item?.url ?? 'https://');
+  const [url, setUrl] = useState(item?.url ?? '');
   const [description, setDescription] = useState(item?.description ?? '');
   const [category, setCategory] = useState(item?.category ?? 'General');
   const [emoji, setEmoji] = useState(item?.emoji ?? '🔗');
@@ -63,8 +64,10 @@ function LinkForm({ item, onClose, onSaved }: { item: LinkItem | null; onClose: 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     setError('');
+    const problem = urlProblem(url);
+    if (problem) return setError(problem);
     try {
-      const body = { title, url, description, category, emoji };
+      const body = { title, url: normalizeUrl(url), description, category, emoji };
       if (item) await api(`/admin/links/${item.id}`, { method: 'PATCH', body }); else await api('/admin/links', { method: 'POST', body });
       onSaved();
     } catch (reason) { setError(messageOf(reason)); }
@@ -74,7 +77,7 @@ function LinkForm({ item, onClose, onSaved }: { item: LinkItem | null; onClose: 
       <form className="form-grid" onSubmit={submit}>
         <Field label="Title"><input value={title} onChange={(e) => setTitle(e.target.value)} required maxLength={80} autoFocus /></Field>
         <Field label="Emoji"><input value={emoji} onChange={(e) => setEmoji(e.target.value)} maxLength={8} /></Field>
-        <div className="span-2"><Field label="Web address"><input value={url} onChange={(e) => setUrl(e.target.value)} required maxLength={500} /></Field></div>
+        <div className="span-2"><Field label="Web address"><UrlInput value={url} onChange={setUrl} required /></Field></div>
         <Field label="Group" hint="Links with the same group sit together"><input value={category} onChange={(e) => setCategory(e.target.value)} maxLength={40} list="link-groups" /></Field>
         <Field label="Short description"><input value={description} onChange={(e) => setDescription(e.target.value)} maxLength={200} /></Field>
         <datalist id="link-groups"><option value="Guides" /><option value="Payments" /><option value="Insurance" /><option value="HR" /><option value="IT" /></datalist>

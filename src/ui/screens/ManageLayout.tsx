@@ -41,8 +41,9 @@ export function ManageLayout({ ctx }: { ctx: Ctx }) {
   const [confirmRetire, setConfirmRetire] = useState(false);
   const [pendingMoves, setPendingMoves] = useState<Record<string, { x: number; y: number }>>({});
   const [pendingTeams, setPendingTeams] = useState<Record<string, string | null>>({});
+  const [pendingLabels, setPendingLabels] = useState<Record<string, Resource['labelSide']>>({});
   const [saving, setSaving] = useState(false);
-  const dirtyCount = Object.keys(pendingMoves).length + Object.keys(pendingTeams).length;
+  const dirtyCount = Object.keys(pendingMoves).length + Object.keys(pendingTeams).length + Object.keys(pendingLabels).length;
   const dirty = dirtyCount > 0;
 
   useEffect(() => {
@@ -61,11 +62,12 @@ export function ManageLayout({ ctx }: { ctx: Ctx }) {
   const shown = useMemo(() => (resources ?? []).map((resource) => {
     const move = pendingMoves[resource.id];
     const hasTeam = resource.id in pendingTeams;
-    if (!move && !hasTeam) return resource;
+    const hasLabel = resource.id in pendingLabels;
+    if (!move && !hasTeam && !hasLabel) return resource;
     const teamId = pendingTeams[resource.id];
     const team = hasTeam ? (teamId ? ctx.teams.find((t) => t.id === teamId) : null) : resource.team;
-    return { ...resource, x: move?.x ?? resource.x, y: move?.y ?? resource.y, team: team ? { id: team.id, name: team.name, color: team.color } : null };
-  }), [resources, pendingMoves, pendingTeams, ctx.teams]);
+    return { ...resource, x: move?.x ?? resource.x, y: move?.y ?? resource.y, labelSide: hasLabel ? pendingLabels[resource.id] : resource.labelSide, team: team ? { id: team.id, name: team.name, color: team.color } : null };
+  }), [resources, pendingMoves, pendingTeams, pendingLabels, ctx.teams]);
   const visible = useMemo(() => shown.filter((resource) => resource.type === kind), [shown, kind]);
   const selection = useMemo(() => shown.filter((resource) => selectedIds.includes(resource.id)), [shown, selectedIds]);
   const single = selection.length === 1 ? selection[0] : null;
@@ -82,20 +84,23 @@ export function ManageLayout({ ctx }: { ctx: Ctx }) {
     try {
       const byTeam = new Map<string | null, string[]>();
       for (const [id, teamId] of Object.entries(pendingTeams)) byTeam.set(teamId, [...(byTeam.get(teamId) ?? []), id]);
-      const result = await api<{ moved: number; assigned: number }>('/admin/map/layout', { method: 'PUT', body: {
+      const result = await api<{ moved: number; assigned: number; relabelled: number }>('/admin/map/layout', { method: 'PUT', body: {
         moves: Object.entries(pendingMoves).map(([id, point]) => ({ id, ...point })),
         assignments: [...byTeam.entries()].map(([teamId, resourceIds]) => ({ teamId, resourceIds })),
+        labels: Object.entries(pendingLabels).map(([id, side]) => ({ id, side })),
       } });
       setPendingMoves({});
       setPendingTeams({});
+      setPendingLabels({});
       await Promise.all([load(), ctx.reloadTeams()]);
-      toast(`Saved: ${result.moved} seats moved, ${result.assigned} team assignments.`, 'success');
+      toast(`Saved: ${result.moved} seats moved, ${result.assigned} team assignments${result.relabelled ? `, ${result.relabelled} number placements` : ''}.`, 'success');
     } catch (reason) { toast(messageOf(reason), 'error'); } finally { setSaving(false); }
   }
   function discardLayout() {
     if (!window.confirm(`Discard ${dirtyCount} unsaved ${dirtyCount === 1 ? 'change' : 'changes'}?`)) return;
     setPendingMoves({});
     setPendingTeams({});
+    setPendingLabels({});
   }
 
   const exportPdf = async () => {
@@ -104,6 +109,12 @@ export function ManageLayout({ ctx }: { ctx: Ctx }) {
       exportTeamLayoutPdf(ctx.plan, shown, ctx.teams);
       toast('Your PDF is downloading.', 'success');
     } catch (reason) { toast(messageOf(reason), 'error'); }
+  };
+
+  const placeLabels = (side: Resource['labelSide']) => {
+    const ids = selection.filter((resource) => resource.type === 'desk').map((resource) => resource.id);
+    if (!ids.length) return toast('Select some desks first.', 'info');
+    setPendingLabels((current) => ({ ...current, ...Object.fromEntries(ids.map((id) => [id, side])) }));
   };
 
   const moveSeat = (id: string, x: number, y: number) => setPendingMoves((current) => ({ ...current, [id]: { x, y } }));
@@ -185,6 +196,17 @@ export function ManageLayout({ ctx }: { ctx: Ctx }) {
               </div>
             </div>
           )}
+          {canSpaces && selection.some((r) => r.type === 'desk') && (
+            <div className="assign-box">
+              <strong>Seat number goes on the?</strong>
+              <div className="segmented small label-side-picker" role="group" aria-label="Where the seat number sits">
+                {([[null, 'Auto'], ['top', 'Top'], ['bottom', 'Bottom'], ['left', 'Left'], ['right', 'Right']] as [Resource['labelSide'], string][]).map(([side, text]) => (
+                  <button key={text} className={selection.every((r) => r.type !== 'desk' || r.labelSide === side) ? 'active' : ''} onClick={() => placeLabels(side)}>{text}</button>
+                ))}
+              </div>
+              <small className="muted">Auto picks the side with the most free space. Zoom in on the map to check, then save.</small>
+            </div>
+          )}
           {single && canSpaces && (
             <div className="single-edit">
               <Field label="Label"><input defaultValue={single.label} key={single.id + single.label} maxLength={40} onBlur={(e) => e.target.value.trim() && e.target.value.trim() !== single.label && void saveSingle({ label: e.target.value.trim() })} /></Field>
@@ -219,7 +241,7 @@ export function ManageLayout({ ctx }: { ctx: Ctx }) {
 
       {showAdd && <AddSpace kind={kind} onClose={() => setShowAdd(false)} onAdded={async (id) => { setShowAdd(false); await Promise.all([load(), ctx.reloadTeams()]); setSelectedIds([id]); toast('Added — drag it to the right spot.', 'success'); }} />}
       {showFit && <FitGrid ctx={ctx} onClose={() => setShowFit(false)} onApplied={async () => { setShowFit(false); await load(); }} />}
-      {showFiles && <PlanAndSeats ctx={ctx} canTeams={canTeams} onClose={() => setShowFiles(false)} onChanged={async () => { await Promise.all([load(), ctx.reloadTeams(), ctx.reloadMap()]); }} />}
+      {showFiles && <PlanAndSeats canTeams={canTeams} onClose={() => setShowFiles(false)} onChanged={async () => { await Promise.all([load(), ctx.reloadTeams(), ctx.reloadMap()]); }} />}
       {confirmRetire && single && (
         <Modal title={`Retire ${single.label}?`} onClose={() => setConfirmRetire(false)}>
           <p>It disappears from the map and its upcoming bookings are cancelled. History is kept.</p>
@@ -285,7 +307,7 @@ function FitGrid({ ctx, onClose, onApplied }: { ctx: Ctx; onClose: () => void; o
   );
 }
 
-function PlanAndSeats({ ctx, canTeams, onClose, onChanged }: { ctx: Ctx; canTeams: boolean; onClose: () => void; onChanged: () => Promise<void> }) {
+function PlanAndSeats({ canTeams, onClose, onChanged }: { canTeams: boolean; onClose: () => void; onChanged: () => Promise<void> }) {
   const { toast } = useKit();
   const [busy, setBusy] = useState(false);
   const [seats, setSeats] = useState<unknown[] | null>(null);
@@ -299,7 +321,8 @@ function PlanAndSeats({ ctx, canTeams, onClose, onChanged }: { ctx: Ctx; canTeam
     setBusy(true);
     try {
       await uploadBlob('/admin/floor-plan', file, 'application/pdf');
-      await Promise.all([ctx.reloadPlan(), onChanged()]);
+      // Reloading the app info notices the new plan version and downloads it once.
+      await onChanged();
       toast('Floor plan updated for everyone.', 'success');
     } catch (reason) { toast(messageOf(reason), 'error'); } finally { setBusy(false); }
   }

@@ -25,7 +25,7 @@ A friendly, hobby-grade office companion: book desks and rooms on the real floor
 
   New accounts get a temporary password and must choose their own at first sign-in.
 - **Custom roles:** a super admin builds role templates (for example "HR partner", "Facilities", "Culture crew") from any mix of permissions, then gives them to people. Four starters are included.
-- **Everything is switchable:** Manage â†’ Settings lets a super admin turn each feature on or off (links, contacts, menu, announcements, kudos, polls, celebrations, idea box, who's in, points) and set the app name, tagline, welcome note and default colour theme.
+- **Everything is switchable:** Manage → Settings lets a super admin turn each feature on or off (links, contacts, menu, announcements, kudos, polls, celebrations, idea box, who's in, points) and set the app name, tagline, welcome note and default colour theme. A few extra options sit under Options: **Show who booked** (names in availability details, off by default) and **“I’m going” on events** (turn off to hide the button and the going counts; the server also refuses RSVPs). Changes reach other people within a few minutes.
 - **Useful stuff:** links to user guides and portals (payments, insurance, anything), an important-contacts directory with tap-to-call and email, announcements on the home page, and links on events.
 - **Food menu:** daily breakfast, lunch, snacks and dinner with diet markers and likes. Menu managers can repeat a dish across days.
 - **Community:** kudos wall with badges and cheers, polls, birthdays and work anniversaries (birthdays are opt-in), and an anonymous idea box for HR and leaders.
@@ -34,6 +34,8 @@ A friendly, hobby-grade office companion: book desks and rooms on the real floor
 - **Teams are fully configurable** (Manage â†’ Map & teams): create/rename/recolour teams, box-select seats on the map or type a range like `Z001-Z020`, then assign. The seat list from the Excel workbook is only the starting point.
 - **Map gestures:** scroll wheel zooms toward the cursor, drag to pan, pinch with two fingers on a phone.
 - **Stay options:** besides 1 to 8 hours you can book until 5 pm, 8 pm or midnight. The seat panel lets you change date, arrival and stay and shows live availability. Admins can set a suggested stay on a QR, and each person's last choice is remembered.
+- **Availability before you click:** pick a date, arrival time and stay and the map instantly colours every seat and room (free, booked at your time, yours, not available). Hover (desktop) or tap (phone) for details such as "Booked 9:00 am – 1:00 pm, free from 1:00 pm" or "Free until 3:00 pm"; rooms also show a small day timeline. Changing the time or stay never calls the server: one compact `GET /api/availability?date=` per date is cached in the browser. Your own booking or cancellation updates the map at once; the day is re-checked when the tab comes back to the front, and a 409 conflict explains when the space is free again. Who booked is hidden unless a super admin turns on **Show who booked** (managers with `bookings.manage` always see names).
+- **Seat numbers placed smartly:** each seat number goes on the side with the most free space (top, bottom, left or right), shrinks or hides where it would collide and appears as you zoom in. Override a seat in **Manage → Map & teams** (Selection → "Seat number goes on the…").
 - **QR stickers** show the seat or room name under the code.
 - **Save button for the map:** moving seats and changing teams is staged until you press **Save changes** (or **Discard**). A save is written to the activity log.
 - **Exports:** the activity log and the bookings list export as CSV (Manage â†’ Activity and Bookings), with optional date ranges for the log.
@@ -84,6 +86,13 @@ Both files are private and are **never committed** (`local-data/` and `data/` ar
 3. `npm.cmd run db:reset` then `npm.cmd run dev` to load them.
 
 The same two files can be loaded into a running (or deployed) app from **Manage â†’ Map & teams â†’ Plan & seats**: upload the PDF and the seat JSON. The PDF is stored privately in the database and only served after sign-in.
+
+## How the app keeps server calls low
+
+- **One call after sign-in:** `GET /api/bootstrap` returns the settings (feature switches, branding, options), teams, map info, floor-plan version and your summary, with an ETag. The old endpoints (`/config`, `/teams`, `/map`, `/me/summary`) still work.
+- **A tiny heartbeat:** `GET /api/pulse` returns `{ configVersion, serverTime }`. The browser calls it when a tab comes back to the front and then every 3 minutes, only while the tab is visible. Anything an admin changes in Settings, branding, teams, spaces or the map bumps `configVersion` (it is also sent in an `X-Config-Version` header on every response), and a browser that sees a new number reloads bootstrap. So switching the Kudos wall off or on reaches other people within a few minutes, without a manual refresh, and the admin's own screen updates immediately. To add something to the heartbeat later (notification counts, usage beacons), register it on the server with `app.locals.pulse.add('name', async (req) => value)`; keep it to one cheap query. Clients read the extra fields from the same reply (`startPulse` in `src/lib/pulse.ts`).
+- **Spaces are cached by version:** the list of desks and rooms is fetched once and re-fetched only when `configVersion` changes; availability is fetched per date as described above.
+- **Migrations:** `server/migrations/NNN-name.sql` must be additive. The Worker's bundled list is generated (`npm run migrations:gen`, run by `cf:dev`/`cf:deploy`) and a test fails if it is stale.
 
 ## Deploy
 

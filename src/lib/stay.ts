@@ -10,7 +10,7 @@ export const STAY_OPTIONS: StayOption[] = [
 
 export const isStayCode = (value: unknown): value is string => typeof value === 'string' && STAY_OPTIONS.some((option) => option.code === value);
 
-const nextDay = (date: string) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date(Date.parse(`${date}T12:00:00+05:30`) + 86_400_000));
+export const nextDay = (date: string) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date(Date.parse(`${date}T12:00:00+05:30`) + 86_400_000));
 
 export function stayEnd(date: string, time: string, code: string): Date {
   const start = toInstant(date, time);

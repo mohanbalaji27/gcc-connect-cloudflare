@@ -1,23 +1,29 @@
 ﻿import { useState } from 'react';
-import type { Branding, FeatureKey } from '../../lib/types';
+import type { Branding, FeatureKey, OptionKey } from '../../lib/types';
 import { api, messageOf } from '../../lib/api';
 import type { Ctx } from '../App';
 import { Field, Switch, useKit } from '../kit';
 
 const ACCENT_LABELS: Record<string, string> = { green: 'Forest', ocean: 'Ocean', sunset: 'Sunset', berry: 'Berry', mono: 'Ink' };
+const OPTION_HINTS: Partial<Record<OptionKey, string>> = {
+  showBookerNames: 'Off by default: people only see that a seat is booked and for when. Managers who can see bookings always see names.',
+  eventsRsvpEnabled: 'Turn off to hide the “I’m going” button and the going counts on events.',
+};
 
 export function ManageSettings({ ctx }: { ctx: Ctx }) {
   const { toast } = useKit();
   const [features, setFeatures] = useState(ctx.config.features);
   const [branding, setBranding] = useState<Branding>(ctx.config.branding);
+  const [options, setOptions] = useState(ctx.config.options);
   const [busy, setBusy] = useState(false);
 
   async function save() {
     setBusy(true);
     try {
-      await api('/admin/settings', { method: 'PUT', body: { features, branding } });
+      await api('/admin/settings', { method: 'PUT', body: { features, branding, options } });
+      // Your own screen updates right now; everyone else's picks the change up within a few minutes (see pulse).
       await ctx.reloadConfig();
-      toast('Settings saved. Everyone will see the changes on their next refresh.', 'success');
+      toast('Saved. It is live for you now, and reaches everyone else within a few minutes, or as soon as they return to the app.', 'success');
     } catch (reason) { toast(messageOf(reason), 'error'); } finally { setBusy(false); }
   }
 
@@ -25,10 +31,16 @@ export function ManageSettings({ ctx }: { ctx: Ctx }) {
     <div className="two-col">
       <section className="panel form-stack">
         <h2>Features</h2>
-        <p className="muted">Turn parts of the app on or off for everyone. Content stays saved while a feature is off.</p>
+        <p className="muted">Turn parts of the app on or off for everyone. Content stays saved while a feature is off. Changes reach other people within a few minutes, or as soon as they come back to the app.</p>
         <ul className="switch-list">
           {(Object.keys(ctx.config.featureCatalog) as FeatureKey[]).map((key) => (
             <li key={key}><div><strong>{ctx.config.featureCatalog[key]}</strong></div><Switch checked={features[key]} label={ctx.config.featureCatalog[key]} onChange={(value) => setFeatures({ ...features, [key]: value })} /></li>
+          ))}
+        </ul>
+        <h2>Options</h2>
+        <ul className="switch-list">
+          {(Object.keys(ctx.config.optionCatalog) as OptionKey[]).map((key) => (
+            <li key={key}><div><strong>{ctx.config.optionCatalog[key]}</strong>{OPTION_HINTS[key] && <small>{OPTION_HINTS[key]}</small>}</div><Switch checked={options[key]} label={ctx.config.optionCatalog[key]} onChange={(value) => setOptions({ ...options, [key]: value })} /></li>
           ))}
         </ul>
       </section>

@@ -1,5 +1,6 @@
 ﻿import { createPortal } from 'react-dom';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { normalizeUrl, splitUrl, urlProblem } from '../lib/url';
 
 const PATHS: Record<string, string> = {
   home: 'M3 11.5 12 4l9 7.5M5.5 10v9.5h13V10',
@@ -157,6 +158,34 @@ export function Empty({ icon = 'sparkle', title, children }: { icon?: string; ti
 
 export function Field({ label, children, hint }: { label: string; children: ReactNode; hint?: string }) {
   return <label className="field"><span>{label}</span>{children}{hint && <small>{hint}</small>}</label>;
+}
+
+// Web address input used everywhere: a fixed "https://" in front, bare domains and pasted links are cleaned up as you
+// type (duplicate schemes dropped, spaces trimmed), and a mistake is explained under the box once you leave it.
+export function UrlInput({ value, onChange, placeholder = 'example.com/page', required = false, ariaLabel, maxLength = 500 }: {
+  value: string; onChange: (value: string) => void; placeholder?: string; required?: boolean; ariaLabel?: string; maxLength?: number;
+}) {
+  const [touched, setTouched] = useState(false);
+  const { scheme, rest } = splitUrl(value);
+  const problem = touched ? urlProblem(value) : null;
+  const emit = (raw: string) => {
+    const next = splitUrl(raw, scheme);
+    onChange(next.rest ? `${next.scheme}://${next.rest}` : '');
+  };
+  return (
+    <span className="url-field">
+      <span className={`url-input ${problem ? 'is-invalid' : ''}`}>
+        <span className="url-prefix" aria-hidden="true">{scheme}://</span>
+        <input
+          type="text" inputMode="url" autoCapitalize="off" autoCorrect="off" autoComplete="off" spellCheck={false}
+          value={rest} placeholder={placeholder} required={required} maxLength={maxLength} aria-label={ariaLabel} aria-invalid={Boolean(problem)}
+          onChange={(event) => emit(event.target.value)}
+          onBlur={() => { setTouched(true); const clean = normalizeUrl(value); if (clean !== value) onChange(clean); }}
+        />
+      </span>
+      {problem && <small className="field-error" role="alert">{problem}</small>}
+    </span>
+  );
 }
 
 export function Avatar({ name, emoji, size = 38 }: { name: string; emoji?: string; size?: number }) {

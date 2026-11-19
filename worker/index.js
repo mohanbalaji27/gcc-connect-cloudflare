@@ -3,12 +3,10 @@ import { httpServerHandler } from 'cloudflare:node';
 import { createApp } from '../server/app.js';
 import { prepareDatabase } from '../server/setup.js';
 import { createEdgeAdapter } from './pg-edge-adapter.js';
-// .sql files are bundled as text (see "rules" in wrangler.jsonc), because a Worker has no file system to read them from.
-import initial from '../server/migrations/001-initial.sql';
-import appFiles from '../server/migrations/002-app-files.sql';
-import features from '../server/migrations/003-features.sql';
+// A Worker has no file system, so the migration files are bundled as text (see "rules" in wrangler.jsonc).
+// This list is generated from server/migrations/*.sql (npm run migrations:gen) and checked by the test suite.
+import { MIGRATIONS } from './migrations.generated.js';
 
-const MIGRATIONS = [initial, appFiles, features].map((sql, index) => ({ version: index + 1, sql }));
 const INTERNAL_PORT = 8787;
 
 const connectionString = () => {

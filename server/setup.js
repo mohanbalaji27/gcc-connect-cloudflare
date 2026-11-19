@@ -23,10 +23,13 @@ export function readMigrationFiles() {
 
 export async function migrate(db, migrations = readMigrationFiles()) {
   await db.exec('CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())');
+  const done = new Set((await db.query('SELECT version FROM schema_migrations')).rows.map((row) => row.version));
   for (const { version, sql } of migrations) {
-    const applied = await db.query('SELECT 1 FROM schema_migrations WHERE version = $1', [version]);
-    if (applied.rows.length) continue;
+    if (done.has(version)) continue;
     await db.tx(async (tx) => {
+      // Two Worker instances starting together must not both apply the same migration.
+      await tx.query('SELECT pg_advisory_xact_lock(727310)');
+      if ((await tx.query('SELECT 1 FROM schema_migrations WHERE version = $1', [version])).rows.length) return;
       await tx.exec(sql);
       await tx.query('INSERT INTO schema_migrations (version) VALUES ($1)', [version]);
     });
@@ -86,6 +89,8 @@ async function seedSpaces(db, options) {
       await importInventory(tx, { seats });
     }
     for (const [index, [id, label, description, capacity, amenities]] of ROOMS.entries()) {
+      // A seat file that already brought a room with the same name (with its own position) wins over the default.
+      if ((await tx.query("SELECT 1 FROM resources WHERE type = 'room' AND lower(label) = lower($1)", [label])).rows[0]) continue;
       const known = roomPositions.get(label.toLowerCase());
       const x = Number.isFinite(known?.x) ? known.x : 10 + (index % 4) * 25;
       const y = Number.isFinite(known?.y) ? known.y : 92 - Math.floor(index / 4) * 6;

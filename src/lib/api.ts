@@ -7,17 +7,24 @@ export class ApiError extends Error {
 let csrfToken = '';
 export const setCsrf = (token: string) => { csrfToken = token; };
 
-export async function api<T = void>(path: string, init: { method?: string; body?: unknown; headers?: Record<string, string> } = {}): Promise<T> {
+// Every API response carries the current settings version. The app listens, so a change made by an admin is noticed on the
+// very next call (and by the periodic pulse) without any extra requests.
+let configListener: ((version: number) => void) | null = null;
+export const onConfigVersion = (listener: ((version: number) => void) | null) => { configListener = listener; };
+
+export async function api<T = void>(path: string, init: { method?: string; body?: unknown; headers?: Record<string, string>; cache?: RequestCache } = {}): Promise<T> {
   const method = init.method ?? 'GET';
   const headers: Record<string, string> = { ...init.headers };
   if (init.body !== undefined) headers['Content-Type'] = 'application/json';
   if (method !== 'GET') headers['X-CSRF-Token'] = csrfToken;
   let response: Response;
   try {
-    response = await fetch(`/api${path}`, { method, headers, credentials: 'same-origin', body: init.body === undefined ? undefined : JSON.stringify(init.body) });
+    response = await fetch(`/api${path}`, { method, headers, credentials: 'same-origin', cache: init.cache, body: init.body === undefined ? undefined : JSON.stringify(init.body) });
   } catch {
     throw new ApiError('NETWORK', 'We could not reach the server. Check your connection and try again.', 0);
   }
+  const version = Number(response.headers.get('X-Config-Version'));
+  if (version > 0) configListener?.(version);
   if (response.status === 204) return undefined as T;
   let payload: unknown = null;
   try { payload = await response.json(); } catch { payload = null; }

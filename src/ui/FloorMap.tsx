@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Resource } from '../lib/types';
 import type { FloorPlanImage } from '../lib/floorplan';
+import { labelFont, layoutLabels } from '../lib/labelLayout';
 import { Icon } from './kit';
+
+export type MapState = 'free' | 'booked' | 'mine' | 'blocked' | 'unknown';
+export interface MapTip { headline: string; detail?: string }
 
 interface Props {
   resources: Resource[];
@@ -15,12 +19,19 @@ interface Props {
   onSelectMany?: (ids: string[], additive: boolean) => void;
   highlightTeamId?: string | null;
   showAvailability?: boolean;
+  /** Booking mode: how each space looks for the chosen time. Without it, the old resource.available flag is used. */
+  stateOf?: (resource: Resource) => MapState;
+  /** Booking mode: text for the hover card (desktop). Called only for the hovered space. */
+  tipFor?: (resource: Resource) => MapTip | null;
+  /** Bring this space into view. `center` also scrolls the map to it (for picks made outside the map, e.g. a QR scan); without it
+   *  only the page is nudged so the booking sheet on phones does not cover the space. */
+  focus?: { id: string; n: number; center?: boolean } | null;
 }
 
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 8;
 
-export function FloorMap({ resources, plan, planLoading, selectedIds, onSelect, mode = 'book', tool = 'move', onMove, onSelectMany, highlightTeamId, showAvailability = true }: Props) {
+export function FloorMap({ resources, plan, planLoading, selectedIds, onSelect, mode = 'book', tool = 'move', onMove, onSelectMany, highlightTeamId, showAvailability = true, stateOf, tipFor, focus }: Props) {
   const viewport = useRef<HTMLDivElement>(null);
   const surface = useRef<HTMLDivElement>(null);
   const [zoom, setZoom] = useState(() => (typeof window !== 'undefined' && window.innerWidth < 700 ? 2.8 : 1));
@@ -36,6 +47,17 @@ export function FloorMap({ resources, plan, planLoading, selectedIds, onSelect, 
   const panCandidate = useRef<{ x: number; y: number; left: number; top: number; moved: boolean } | null>(null);
   const suppressClick = useRef(false);
   const [panning, setPanning] = useState(false);
+  const [hoverId, setHoverId] = useState<string | null>(null);
+  const [viewportWidth, setViewportWidth] = useState(0);
+
+  useEffect(() => {
+    const element = viewport.current;
+    if (!element) return undefined;
+    setViewportWidth(element.clientWidth);
+    const observer = new ResizeObserver(() => setViewportWidth(element.clientWidth));
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
 
   // Zoom keeping the point under (clientX, clientY) fixed on screen.
   const zoomAt = useCallback((next: number, clientX?: number, clientY?: number) => {
@@ -173,15 +195,50 @@ export function FloorMap({ resources, plan, planLoading, selectedIds, onSelect, 
     onSelectMany?.(ids, event.shiftKey || event.ctrlKey || event.metaKey);
   };
 
-  const placed = resources.filter((resource) => resource.x !== null && resource.y !== null);
+  const placed = useMemo(() => resources.filter((resource) => resource.x !== null && resource.y !== null), [resources]);
   const unplaced = resources.length - placed.length;
-  const labelsVisible = zoom >= 3.4;
+  const mapWidth = viewportWidth * zoom;
+  const seatText = (resource: Resource) => (resource.type === 'room' ? resource.label : resource.label.replace(/^Z/, ''));
+  // Where each seat number goes (and from which map width it fits) is worked out once per layout, not per zoom step.
+  const labelPlacement = useMemo(
+    () => layoutLabels(placed.map((resource) => ({ id: resource.id, x: resource.x!, y: resource.y!, text: seatText(resource), side: resource.labelSide, room: resource.type === 'room' })), aspect),
+    [placed, aspect],
+  );
+  const hovered = hoverId ? placed.find((resource) => resource.id === hoverId) ?? null : null;
+  const hoveredTip = hovered && tipFor ? tipFor(hovered) : null;
 
-  const centered = useRef(false);
   useEffect(() => {
     const element = viewport.current;
-    if (centered.current || !element || !placed.length || window.innerWidth >= 700) return;
-    centered.current = true;
+    const target = focus ? placed.find((resource) => resource.id === focus.id) : null;
+    if (!element || !target) return;
+    if (focus?.center) {
+      const left = (target.x! / 100) * element.scrollWidth;
+      const top = (target.y! / 100) * element.scrollHeight;
+      const margin = 0.22;
+      const inside = left > element.scrollLeft + element.clientWidth * margin && left < element.scrollLeft + element.clientWidth * (1 - margin)
+        && top > element.scrollTop + element.clientHeight * margin && top < element.scrollTop + element.clientHeight * (1 - margin);
+      if (!inside) element.scrollTo({ left: left - element.clientWidth / 2, top: top - element.clientHeight * 0.4, behavior: 'smooth' });
+      element.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+    // On phones the booking sheet slides up over the bottom of the screen: keep the chosen space clear of it.
+    const timer = window.setTimeout(() => {
+      const sheet = document.querySelector<HTMLElement>('.selection.open');
+      const dot = surface.current?.querySelector<HTMLElement>(`[data-id="${CSS.escape(target.id)}"]`);
+      if (!sheet || !dot || getComputedStyle(sheet).position !== 'fixed') return;
+      const overlap = dot.getBoundingClientRect().bottom - (sheet.getBoundingClientRect().top - 28);
+      if (overlap > 0) window.scrollBy({ top: overlap, behavior: 'smooth' });
+    }, 380);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focus?.n]);
+
+  // On a phone the map opens zoomed in, centred on the spaces being shown (and again when you switch between desks and rooms).
+  const centeredOn = useRef('');
+  useEffect(() => {
+    const element = viewport.current;
+    const key = placed.length ? placed[0].type : '';
+    if (centeredOn.current === key || !element || !placed.length || window.innerWidth >= 700) return;
+    centeredOn.current = key;
     const cx = placed.reduce((sum, r) => sum + r.x!, 0) / placed.length / 100;
     const cy = placed.reduce((sum, r) => sum + r.y!, 0) / placed.length / 100;
     requestAnimationFrame(() => {
@@ -202,7 +259,7 @@ export function FloorMap({ resources, plan, planLoading, selectedIds, onSelect, 
         <span className="map-hint">{mode === 'edit' ? (tool === 'move' ? 'Drag a seat to move it, drag empty space to pan, scroll or pinch to zoom' : 'Drag a box to select seats, scroll or pinch to zoom') : 'Tap a seat, scroll or pinch to zoom, drag to move around'}</span>
       </div>
       <div
-        className={`map-viewport ${panning ? 'panning' : ''} ${zoom > 1 && canPan ? 'can-pan' : ''}`}
+        className={`map-viewport ${panning ? 'panning' : ''} ${zoom > 1 && canPan ? 'can-pan' : ''} ${zoom <= MIN_ZOOM && mode !== 'edit' ? 'fit' : ''}`}
         ref={viewport}
         onPointerDown={onViewportDown}
         onPointerMove={onViewportMove}
@@ -211,9 +268,9 @@ export function FloorMap({ resources, plan, planLoading, selectedIds, onSelect, 
         onClickCapture={(event) => { if (suppressClick.current) { event.preventDefault(); event.stopPropagation(); } }}
       >
         <div
-          className={`map-surface ${labelsVisible ? 'show-labels' : ''} ${tool === 'select' && mode === 'edit' ? 'tool-select' : ''}`}
+          className={`map-surface ${tool === 'select' && mode === 'edit' ? 'tool-select' : ''}`}
           ref={surface}
-          style={{ width: `${zoom * 100}%`, aspectRatio: String(aspect) }}
+          style={{ width: `${zoom * 100}%`, aspectRatio: String(aspect), ['--label-font' as string]: `${labelFont(mapWidth)}px` }}
           onPointerDown={beginBand}
           onPointerMove={moveBand}
           onPointerUp={endBand}
@@ -227,27 +284,40 @@ export function FloorMap({ resources, plan, planLoading, selectedIds, onSelect, 
             const x = moving?.x ?? resource.x!;
             const y = moving?.y ?? resource.y!;
             const color = resource.team?.color ?? '#8f9a94';
-            const booked = showAvailability && resource.available === false;
+            const state: MapState = !showAvailability ? 'unknown' : stateOf ? stateOf(resource) : resource.available === false ? 'booked' : 'unknown';
             const dim = highlightTeamId !== undefined && highlightTeamId !== null && resource.team?.id !== highlightTeamId;
-            const classes = ['seat-dot', resource.type === 'room' ? 'is-room' : '', booked ? 'is-booked' : '', selected.has(resource.id) ? 'is-selected' : '', dim ? 'is-dim' : '', moving ? 'is-dragging' : ''].filter(Boolean).join(' ');
+            const placement = labelPlacement.get(resource.id);
+            const labelShown = resource.type === 'room' || (placement !== undefined && mapWidth >= placement.minWidth);
+            const classes = ['seat-dot', resource.type === 'room' ? 'is-room' : '', state === 'booked' ? 'is-booked' : '', state === 'mine' ? 'is-mine' : '', state === 'blocked' ? 'is-blocked' : '', selected.has(resource.id) ? 'is-selected' : '', dim ? 'is-dim' : '', moving ? 'is-dragging' : ''].filter(Boolean).join(' ');
+            const stateWords = state === 'booked' ? ', booked at your time' : state === 'mine' ? ', booked by you' : state === 'blocked' ? ', not available' : '';
             return (
               <button
                 key={resource.id}
+                data-id={resource.id}
                 className={classes}
                 style={{ left: `${x}%`, top: `${y}%`, ['--seat' as string]: resource.type === 'room' ? '#5b5bd6' : color }}
                 onPointerDown={(event) => beginDrag(event, resource)}
                 onPointerMove={moveDrag}
                 onPointerUp={(event) => endDrag(event, resource)}
                 onPointerCancel={() => setDrag(null)}
+                onPointerEnter={(event) => { if (event.pointerType === 'mouse') setHoverId(resource.id); }}
+                onPointerLeave={() => setHoverId((current) => (current === resource.id ? null : current))}
+                onFocus={(event) => { if (event.currentTarget.matches(':focus-visible')) setHoverId(resource.id); }}
+                onBlur={() => setHoverId((current) => (current === resource.id ? null : current))}
                 onClick={(event) => { if (mode !== 'edit' || tool !== 'move') onSelect(resource, event.shiftKey || event.ctrlKey || event.metaKey); }}
-                aria-label={`${resource.label}${resource.team ? `, ${resource.team.name}` : ''}${booked ? ', booked' : ''}`}
+                aria-label={`${resource.label}${resource.team ? `, ${resource.team.name}` : ''}${stateWords}`}
                 aria-pressed={selected.has(resource.id)}
               >
-                <span className="seat-label">{resource.type === 'room' ? resource.label : resource.label.replace(/^Z/, '')}</span>
-                <span className="seat-tip">{resource.label}{resource.team ? ` · ${resource.team.name}` : ''}{booked ? ' · booked' : ''}</span>
+                {labelShown && <span className={`seat-label side-${placement?.side ?? 'bottom'}`}>{seatText(resource)}</span>}
               </button>
             );
           })}
+          {hovered && (
+            <div className={`map-tip ${(hovered.y ?? 50) < 16 ? 'below' : ''} ${(hovered.x ?? 50) < 14 ? 'align-start' : (hovered.x ?? 50) > 86 ? 'align-end' : ''}`} style={{ left: `${hovered.x}%`, top: `${hovered.y}%` }} role="tooltip">
+              <strong>{hovered.label}{hovered.team ? ` · ${hovered.team.name}` : ''}</strong>
+              {hoveredTip ? <><span>{hoveredTip.headline}</span>{hoveredTip.detail && <small>{hoveredTip.detail}</small>}</> : null}
+            </div>
+          )}
           {band && <div className="band" style={{ left: `${Math.min(band.x0, band.x1)}%`, top: `${Math.min(band.y0, band.y1)}%`, width: `${Math.abs(band.x1 - band.x0)}%`, height: `${Math.abs(band.y1 - band.y0)}%` }} />}
         </div>
       </div>
