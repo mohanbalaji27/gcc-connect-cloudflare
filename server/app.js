@@ -9,6 +9,8 @@ import {
 import { gridPlacement, validCalibration, DEFAULT_CALIBRATION } from './layout.js';
 import { importInventory } from './inventory.js';
 import { registerFeatures } from './features.js';
+import { registerAnalytics } from './analytics.js';
+import { registerActivity } from './activity.js';
 import { bumpConfigVersion } from './config-version.js';
 
 const SESSION_DURATION_MS = 8 * 60 * 60 * 1000;
@@ -97,7 +99,7 @@ export function createApp(db, options = {}) {
     `gcc_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge};${options.secureCookies ? ' Secure;' : ''}`;
   // Anything that changes what browsers cache (settings, teams, map, floor plan, spaces) also bumps the config version,
   // so the audit call itself is the single place that keeps clients in sync.
-  const CONFIG_ACTIONS = /^(settings|resource|team|map|floor-plan|inventory)\./;
+  const CONFIG_ACTIONS = /^(settings|resource|team|map|floor-plan|inventory|contact)\./;
   const audit = async (client, actorId, action, entityId = null, detail = '') => {
     await client.query('INSERT INTO audit_log (id, actor_id, action, entity_id, detail) VALUES ($1,$2,$3,$4,$5)', [randomUUID(), actorId, action, entityId, String(detail).slice(0, 300)]);
     return CONFIG_ACTIONS.test(action) ? bumpConfigVersion(client) : null;
@@ -157,6 +159,7 @@ export function createApp(db, options = {}) {
   };
 
   // ---------- Authentication ----------
+  let analytics = null;
   app.post('/api/login', async (req, res) => {
     // One box for either the work email or a username / employee ID. The answer never says which of the two was wrong.
     const rawLogin = typeof req.body?.login === 'string' ? req.body.login : typeof req.body?.email === 'string' ? req.body.email : '';
@@ -173,6 +176,8 @@ export function createApp(db, options = {}) {
     if (!employee || !passwordOk) {
       limit(ipKey, 60, 15 * 60 * 1000);
       limit(accountKey, 8, 15 * 60 * 1000);
+      // One activity-log line when a burst of failures pauses sign-in (not one per failed try).
+      if (rateBuckets.get(accountKey)?.count === 8) await audit(db, null, 'security.login-burst', employee?.id ?? null, 'sign-in paused for 15 minutes').catch(() => {});
       throw fail(401, 'LOGIN_FAILED', 'Those sign-in details do not match an account.');
     }
     rateBuckets.delete(accountKey);
@@ -181,6 +186,8 @@ export function createApp(db, options = {}) {
     await db.query('DELETE FROM sessions WHERE expires_at < now()');
     await db.query("DELETE FROM idempotency WHERE created_at < now() - interval '3 days'");
     await db.query('INSERT INTO sessions (token_hash, employee_id, csrf_token, expires_at) VALUES ($1,$2,$3,$4)', [sha256(sessionToken), employee.id, csrfToken, new Date(Date.now() + SESSION_DURATION_MS)]);
+    // Sign-ins feed "logins per day" and the Sign-ins filter of the activity log (never audit_log, so it cannot flood it).
+    await analytics?.recordLogin(employee.id);
     res.set('Set-Cookie', sessionCookie(sessionToken, SESSION_DURATION_MS / 1000));
     res.json({ user: userView(employee), csrfToken });
   });
@@ -245,11 +252,22 @@ export function createApp(db, options = {}) {
   const pulseProviders = new Map();
   const pulse = { add: (name, provider) => pulseProviders.set(name, provider) };
   app.locals.pulse = pulse;
-  app.get('/api/pulse', requireAuth, async (req, res) => {
-    if (!limit(`pulse:${req.user.id}`, 60, 60_000)) throw fail(429, 'RATE_LIMITED', 'Slow down a little.');
+  const pulseBody = async (req) => {
     const body = { configVersion: req.configVersion, serverTime: new Date().toISOString() };
     for (const [name, provider] of pulseProviders) body[name] = await provider(req);
-    res.json(body);
+    return body;
+  };
+  app.get('/api/pulse', requireAuth, async (req, res) => {
+    if (!limit(`pulse:${req.user.id}`, 60, 60_000)) throw fail(429, 'RATE_LIMITED', 'Slow down a little.');
+    res.json(await pulseBody(req));
+  });
+  // The same heartbeat, carrying the browser's batched "screen opened" counts (only sent when there is something to send),
+  // so usage analytics cost no extra request. A throttled or switched-off batch never breaks the heartbeat itself.
+  app.post('/api/pulse', requireAuth, requireCsrf, async (req, res) => {
+    if (!limit(`pulse:${req.user.id}`, 60, 60_000)) throw fail(429, 'RATE_LIMITED', 'Slow down a little.');
+    let usage = { accepted: 0 };
+    try { usage = await analytics.ingest(req, req.body?.usage); } catch (error) { if (error.code !== 'RATE_LIMITED') throw error; usage = { accepted: 0, throttled: true }; }
+    res.json({ ...(await pulseBody(req)), usage });
   });
 
   // ---------- Spaces ----------
@@ -405,7 +423,7 @@ export function createApp(db, options = {}) {
     if (new Date(booking.ends_at).getTime() <= Date.now()) throw fail(409, 'BOOKING_ENDED', 'That booking is already over, so it stays in the history.');
     await db.tx(async (tx) => {
       // The status guard makes a double tap (or two admins) cancel and log exactly once.
-      const cancelled = await tx.query("UPDATE bookings SET status = 'cancelled' WHERE id = $1 AND status = 'confirmed' RETURNING id", [booking.id]);
+      const cancelled = await tx.query("UPDATE bookings SET status = 'cancelled', cancelled_at = now() WHERE id = $1 AND status = 'confirmed' RETURNING id", [booking.id]);
       if (!cancelled.rows.length) throw fail(404, 'BOOKING_NOT_FOUND', 'This booking is no longer available.');
       await audit(tx, req.user.id, 'booking.cancelled', booking.id, booking.employee_id === req.user.id ? 'own booking' : 'cancelled by manager');
     });
@@ -656,7 +674,7 @@ export function createApp(db, options = {}) {
     await db.tx(async (tx) => {
       await tx.query(`UPDATE resources SET ${keys.map((key, index) => `${key} = $${index + 2}`).join(', ')} WHERE id = $1`, [existing.id, ...keys.map((key) => fields[key])]);
       if (fields.active === false && existing.active) {
-        await tx.query("UPDATE bookings SET status = 'cancelled' WHERE resource_id = $1 AND status = 'confirmed' AND ends_at > now()", [existing.id]);
+        await tx.query("UPDATE bookings SET status = 'cancelled', cancelled_at = now() WHERE resource_id = $1 AND status = 'confirmed' AND ends_at > now()", [existing.id]);
       }
       await audit(tx, req.user.id, 'resource.updated', existing.id, keys.join(','));
     });
@@ -668,7 +686,7 @@ export function createApp(db, options = {}) {
     if (!resource || !resource.active) throw fail(404, 'RESOURCE_NOT_FOUND', 'This space is already removed or unavailable.');
     await db.tx(async (tx) => {
       await tx.query('UPDATE resources SET active = FALSE WHERE id = $1', [resource.id]);
-      await tx.query("UPDATE bookings SET status = 'cancelled' WHERE resource_id = $1 AND status = 'confirmed' AND ends_at > now()", [resource.id]);
+      await tx.query("UPDATE bookings SET status = 'cancelled', cancelled_at = now() WHERE resource_id = $1 AND status = 'confirmed' AND ends_at > now()", [resource.id]);
       await audit(tx, req.user.id, 'resource.retired', resource.id, resource.label);
     });
     res.status(204).end();
@@ -961,16 +979,6 @@ export function createApp(db, options = {}) {
     return { from, to };
   };
 
-  app.get('/api/admin/audit/export', requirePermission('users.audit'), async (req, res) => {
-    const { from, to } = rangeFilter(req.query);
-    const { rows } = await db.query(`
-      SELECT a.created_at, e.name AS actor, e.email, a.action, a.detail, a.entity_id
-      FROM audit_log a LEFT JOIN employees e ON e.id = a.actor_id
-      WHERE ($1::timestamptz IS NULL OR a.created_at >= $1) AND ($2::timestamptz IS NULL OR a.created_at < $2)
-      ORDER BY a.created_at DESC LIMIT 20000`, [from, to]);
-    sendCsv(res, 'activity-log.csv', ['Time (UTC)', 'Who', 'Email', 'Action', 'Detail', 'Item id'], rows.map((r) => [r.created_at, r.actor ?? 'System', r.email ?? '', r.action, r.detail, r.entity_id ?? '']));
-  });
-
   app.get('/api/admin/bookings/export', requirePermission('bookings.view_all'), async (req, res) => {
     const { from, to } = rangeFilter(req.query);
     const { rows } = await db.query(`
@@ -979,13 +987,6 @@ export function createApp(db, options = {}) {
       WHERE ($1::timestamptz IS NULL OR b.starts_at >= $1) AND ($2::timestamptz IS NULL OR b.starts_at < $2)
       ORDER BY b.starts_at DESC LIMIT 20000`, [from, to]);
     sendCsv(res, 'bookings.csv', ['Starts (UTC)', 'Ends (UTC)', 'Status', 'Space', 'Type', 'Person', 'Email', 'Team'], rows.map((r) => [r.starts_at, r.ends_at, r.status, r.label, r.type, r.name, r.email, r.team]));
-  });
-
-  app.get('/api/admin/audit', requirePermission('users.audit'), async (_req, res) => {
-    const { rows } = await db.query(`
-      SELECT a.id, a.action, a.entity_id, a.detail, a.created_at, e.name AS actor_name
-      FROM audit_log a LEFT JOIN employees e ON e.id = a.actor_id ORDER BY a.created_at DESC LIMIT 100`);
-    res.json({ entries: rows });
   });
 
   // ---------- Private floor plan ----------
@@ -1036,12 +1037,17 @@ export function createApp(db, options = {}) {
 
   const features = registerFeatures({ app, db, requireAuth, requireSignedIn, requireCsrf, requirePermission, requireAnyPermissions, audit, fail, text, limit, isoDate, userView, sendCsv, options });
   readSettings = features.readSettings;
+  analytics = registerAnalytics({ app, db, requireAuth, requirePermission, fail, limit, readSettings, now: options.now });
+  registerActivity({ app, db, requirePermission, fail, limit, sendCsv });
 
   // Everything the app needs right after sign-in, in one request. The ETag makes repeat calls a cheap 304.
+  // The few Home contacts ride along here (they only change when an admin edits contacts, which bumps the settings version),
+  // so Home needs no request of its own for them.
   app.get('/api/bootstrap', requireAuth, async (req, res) => {
     const [config, teams, map, summary, unread] = await Promise.all([features.readConfig(), loadTeams(), loadMapInfo(), loadSummary(req.user), features.notifier.unreadCount(req.user.id)]);
+    const homeContacts = await features.homeContacts(config);
     res.set('Cache-Control', 'private, no-cache');
-    res.json({ configVersion: req.configVersion, user: req.user, config, ...teams, map, summary, unread });
+    res.json({ configVersion: req.configVersion, user: req.user, config, ...teams, map, summary, unread, homeContacts });
   });
 
   app.use('/api', (_req, _res, next) => next(fail(404, 'NOT_FOUND', 'This API route does not exist.')));

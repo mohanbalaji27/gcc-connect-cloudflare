@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { AuditEntry, CustomRole, ManagedUser, Permission, Role } from '../../lib/types';
+import type { CustomRole, ManagedUser, Permission, Role } from '../../lib/types';
 import { api, messageOf } from '../../lib/api';
-import { inIndia } from '../../lib/format';
 import { canGrant, allInfos } from '../../lib/permissions';
 import type { Ctx } from '../App';
 import { Empty, Field, Icon, Modal, Spinner, useKit } from '../kit';
@@ -182,27 +181,5 @@ function UserForm({ ctx, user, roles, onClose, onSaved }: { ctx: Ctx; user: Mana
       </form>
       {reviewing && user && <DiffConfirm catalog={catalog} before={before} after={effective} subject={user.name} busy={busy} onConfirm={() => void save()} onCancel={() => setReviewing(false)} />}
     </Modal>
-  );
-}
-
-export function ManageActivity() {
-  const { toast } = useKit();
-  const [entries, setEntries] = useState<AuditEntry[] | null>(null);
-  useEffect(() => { api<{ entries: AuditEntry[] }>('/admin/audit').then((r) => setEntries(r.entries)).catch((reason) => { toast(messageOf(reason), 'error'); setEntries([]); }); }, [toast]);
-  const [from, setFrom] = useState('');
-  const [to, setTo] = useState('');
-  const exportUrl = `/api/admin/audit/export?${new URLSearchParams({ ...(from ? { from: new Date(`${from}T00:00:00+05:30`).toISOString() } : {}), ...(to ? { to: new Date(Date.parse(`${to}T00:00:00+05:30`) + 86_400_000).toISOString() } : {}) })}`;
-  return (
-    <section className="panel">
-      <div className="panel-head"><h2>Recent activity</h2>
-        <div className="panel-tools"><label className="inline-date">From <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></label><label className="inline-date">To <input type="date" value={to} onChange={(e) => setTo(e.target.value)} /></label>
-          <a className="button button-small button-primary" href={exportUrl} download><Icon name="download" size={16} /> Export CSV</a></div></div>
-      <p className="muted small-print">The list shows the latest 100 entries. The export includes everything in the chosen dates.</p>
-      {entries === null ? <Spinner /> : entries.length === 0 ? <Empty icon="list" title="Nothing yet" /> : (
-        <ul className="plain-list">{entries.map((entry) => (
-          <li key={entry.id}><div><strong>{entry.action.replace(/[.-]/g, ' ')}</strong><small>{entry.actor_name ?? 'System'}{entry.detail ? ` · ${entry.detail}` : ''}</small></div><small>{inIndia(entry.created_at, { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })}</small></li>
-        ))}</ul>
-      )}
-    </section>
   );
 }

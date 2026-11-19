@@ -107,7 +107,7 @@ function Contacts() {
       <p className="muted">Reception, security, medical room, insurance desk, IT help. Anything people may need in a hurry.</p>
       {items === null ? <Spinner /> : items.length === 0 ? <Empty icon="phone" title="No contacts yet" /> : (
         <ul className="plain-list">{items.map((c) => (
-          <li key={c.id}><div><strong>{c.emoji} {c.name}</strong><small>{c.category}{c.role_title ? ` · ${c.role_title}` : ''}{c.phone ? ` · ${c.phone}` : ''}</small></div>
+          <li key={c.id}><div><strong>{c.emoji} {c.name}</strong>{c.pin_to_home && <span className="pill pill-ok pin-pill">On Home</span>}<small>{c.category}{c.role_title ? ` · ${c.role_title}` : ''}{c.phone ? ` · ${c.phone}` : ''}</small></div>
             <button className="icon-button" aria-label={`Edit ${c.name}`} onClick={() => setEditing(c)}><Icon name="edit" size={16} /></button>
             <button className="icon-button danger" aria-label={`Delete ${c.name}`} onClick={() => void remove(`/admin/contacts/${c.id}`, c.name, toast, load)}><Icon name="trash" size={16} /></button></li>
         ))}</ul>
@@ -119,13 +119,15 @@ function Contacts() {
 
 function ContactForm({ item, onClose, onSaved }: { item: ContactItem | null; onClose: () => void; onSaved: () => void }) {
   const [form, setForm] = useState({ name: item?.name ?? '', roleTitle: item?.role_title ?? '', category: item?.category ?? 'General', phone: item?.phone ?? '', email: item?.email ?? '', hours: item?.hours ?? '', notes: item?.notes ?? '', emoji: item?.emoji ?? '📞' });
+  const [pinToHome, setPinToHome] = useState(item?.pin_to_home ?? false);
   const [error, setError] = useState('');
   const set = (key: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => setForm({ ...form, [key]: e.target.value });
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     setError('');
     try {
-      if (item) await api(`/admin/contacts/${item.id}`, { method: 'PATCH', body: form }); else await api('/admin/contacts', { method: 'POST', body: form });
+      const body = { ...form, pinToHome };
+      if (item) await api(`/admin/contacts/${item.id}`, { method: 'PATCH', body }); else await api('/admin/contacts', { method: 'POST', body });
       onSaved();
     } catch (reason) { setError(messageOf(reason)); }
   }
@@ -141,6 +143,7 @@ function ContactForm({ item, onClose, onSaved }: { item: ContactItem | null; onC
         <Field label="Email"><input type="email" value={form.email} onChange={set('email')} maxLength={120} pattern="[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}" title="A plain email address like name@example.com" /></Field>
         <div className="span-2"><Field label="Hours"><input value={form.hours} onChange={set('hours')} maxLength={80} placeholder="Mon-Fri, 9am to 6pm" /></Field></div>
         <div className="span-2"><Field label="Notes"><textarea rows={2} value={form.notes} onChange={set('notes')} maxLength={300} /></Field></div>
+        <label className="check-line span-2"><input type="checkbox" checked={pinToHome} onChange={(event) => setPinToHome(event.target.checked)} /> <span><strong>Show on Home</strong><small>Pinned contacts get call and email buttons on the Home page (when the Home contacts option is on).</small></span></label>
         {error && <div className="form-error span-2" role="alert">{error}</div>}
         <div className="modal-actions span-2"><button type="button" className="button" onClick={onClose}>Cancel</button><button className="button button-primary">Save</button></div>
       </form>

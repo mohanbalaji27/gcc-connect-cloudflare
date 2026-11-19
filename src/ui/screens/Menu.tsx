@@ -4,6 +4,7 @@ import { api, messageOf } from '../../lib/api';
 import { inIndia, nowTimeInIndia } from '../../lib/format';
 import { loadMenu, mealKey, menuAge, peekMenu, starsText, updateMenu, withLike, withMealState, type MealState, type MenuDish, type MenuWindow, type WrittenReview } from '../../lib/menuData';
 import { nav } from '../../lib/nav';
+import { track } from '../../lib/usage';
 import type { Ctx } from '../App';
 import { Icon, Spinner, useKit } from '../kit';
 import { DietMark, Ornament, Stars } from '../MenuBits';
@@ -44,6 +45,7 @@ export function MenuScreen({ ctx }: { ctx: Ctx }) {
   const [diet, setDiet] = useState<'all' | DietId>('all');
   const [sheet, setSheet] = useState(false);
   const [reviewsOpen, setReviewsOpen] = useState(false);
+  useEffect(() => { if (reviewsOpen) track('menu_reviews'); }, [reviewsOpen]);
   const [written, setWritten] = useState<Record<string, { restricted: boolean; reviews: WrittenReview[] } | 'loading'>>({});
   const strip = useRef<HTMLDivElement>(null);
   const touch = useRef<{ x: number; y: number } | null>(null);

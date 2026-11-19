@@ -46,23 +46,28 @@ export interface TokenRow {
   id: string; expires_at: string | null; max_redemptions: number | null; redemption_count: number;
   revoked: boolean; created_at: string; label: string; type: string;
 }
-export interface AuditEntry { id: string; action: string; entity_id: string | null; detail: string; created_at: string; actor_name: string | null }
+export interface AuditEntry {
+  id: string; at: string; action: string; area: string; areaLabel: string; title: string; text: string;
+  actorId: string | null; actorName: string | null; detail: string; entityId: string | null;
+}
+export interface AuditPage { entries: AuditEntry[]; hasMore: boolean; next: string | null; total?: number; areas?: { id: string; label: string }[] }
 
 export const EVENT_CATEGORIES = ['Learning', 'Community', 'Company', 'Social', 'Wellness', 'Team'];
 
 export type FeatureKey = 'links' | 'contacts' | 'menu' | 'announcements' | 'issues' | 'kudos' | 'polls' | 'celebrations' | 'feedback' | 'whosin' | 'vibes';
 export interface Branding { appName: string; tagline: string; accent: string; welcome: string }
-export type OptionKey = 'showBookerNames' | 'eventsRsvpEnabled' | 'issuePhotosEnabled';
+export type OptionKey = 'showBookerNames' | 'eventsRsvpEnabled' | 'issuePhotosEnabled' | 'homeContacts' | 'usageAnalytics';
 export interface AppConfig {
   features: Record<FeatureKey, boolean>; branding: Branding; options: Record<OptionKey, boolean>; featureCatalog: Record<FeatureKey, string>; optionCatalog: Record<OptionKey, string>; accents: string[];
-  menuReviewsVisibility: ReviewVisibility; menuHistoryDays: number;
+  menuReviewsVisibility: ReviewVisibility; menuHistoryDays: number; usageRetentionDays: number; homeContactsCount: number;
   permissionCatalog: PermissionCatalog; notificationCatalog: NotificationCatalog;
 }
+export interface HomeContact { id: string; name: string; role_title: string; phone: string; email: string; hours: string; emoji: string }
 export interface Bootstrap {
-  configVersion: number; user: User; config: AppConfig; teams: Team[]; unassignedSeats: number; map: MapInfo; summary: Summary; unread: number;
+  configVersion: number; user: User; config: AppConfig; teams: Team[]; unassignedSeats: number; map: MapInfo; summary: Summary; unread: number; homeContacts: HomeContact[];
 }
 export interface LinkItem { id: string; title: string; url: string; description: string; category: string; emoji: string; sort_order: number }
-export interface ContactItem { id: string; name: string; role_title: string; category: string; phone: string; email: string; hours: string; notes: string; emoji: string; sort_order: number }
+export interface ContactItem { id: string; name: string; role_title: string; category: string; phone: string; email: string; hours: string; notes: string; emoji: string; sort_order: number; pin_to_home?: boolean }
 export type { MenuDish as MenuItem } from './menuData';
 export interface Announcement { id: string; title: string; body: string; emoji: string; pinned: boolean; expires_at: string | null; created_at: string }
 export interface Kudos { id: string; badge: string; message: string; created_at: string; from_id: string; from_name: string; from_avatar: string; to_id: string; to_name: string; to_avatar: string; cheers: number; cheered: boolean }
@@ -96,14 +101,27 @@ export interface AppNotification { id: string; type: string; title: string; body
 export interface FeedbackItem { id: string; category: string; message: string; status: 'new' | 'seen' | 'done'; created_at: string; from_name: string | null }
 export interface Insights {
   today: string;
+  officeHours: { from: number; to: number };
   totals: {
-    people: number; desks: number; rooms: number; desksToday: number; roomsToday: number; deskUtilisationToday: number; deskCoverage30d: number;
-    activeBookers30d: number; bookings30d: number; cancelled30d: number; kudos30d: number; votes30d: number; feedbackNew: number; eventsUpcoming: number; rsvpsUpcoming: number;
+    people: number; desks: number; rooms: number; desksToday: number; roomsToday: number; deskUtilisationToday: number; roomUtilisationToday: number; deskCoverage30d: number;
+    activeBookers30d: number; bookings30d: number; deskBookings30d: number; roomBookings30d: number; cancelled30d: number;
+    kudos30d: number | null; votes30d: number | null; feedbackNew: number | null; eventsUpcoming: number; rsvpsUpcoming: number | null;
   };
   trend: { date: string; desks: number; rooms: number; future: boolean }[];
   byTeam: { name: string; color: string; seats: number; bookings: number }[];
   topSpaces: { label: string; type: string; n: number }[];
-  weekdays: { name: string; n: number }[];
+  weekdays: { name: string; days: number; desks: number; rooms: number; avgDesks: number }[];
+}
+export interface UsageFeatureRow { id: string; label: string; opens: number; users: number; prevOpens: number; prevUsers: number }
+export interface UsageSummary {
+  from: string; to: string; days: number; previous: { from: string; to: string }; collecting: boolean; retentionDays: number;
+  since: { features: string | null; logins: string | null };
+  series: { date: string; logins: number; loginPeople: number; active: number }[];
+  totals: { logins: number; activePeople: number; avgDailyActive: number; people: number };
+  reach: { dau: number; wau: number; mau: number; stickiness: number };
+  cohort: { current: number; previous: number; retained: number; retention: number; newPeople: number; returningPeople: number };
+  features: UsageFeatureRow[]; unused: { id: string; label: string }[]; hours: { hour: number; n: number }[];
+  teams: { team: string; people: number; active: number }[];
 }
 
 export const KUDOS_BADGES: Record<string, { emoji: string; label: string }> = {

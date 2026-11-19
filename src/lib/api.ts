@@ -6,6 +6,7 @@ export class ApiError extends Error {
 
 let csrfToken = '';
 export const setCsrf = (token: string) => { csrfToken = token; };
+export const getCsrf = () => csrfToken;
 
 // Every API response carries the current settings version. The app listens, so a change made by an admin is noticed on the
 // very next call (and by the periodic pulse) without any extra requests.

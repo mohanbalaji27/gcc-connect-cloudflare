@@ -5,6 +5,7 @@ import { downloadCalendarFile, inIndia, nowTimeInIndia, timeRange, todayInIndia,
 import { applyLocalBooking, loadDay, refreshLoaded, useAvailability } from '../../lib/availability';
 import { clock, myOverlap, statusFor, type SpaceState, type SpaceStatus } from '../../lib/availabilityMath';
 import { onWake } from '../../lib/pulse';
+import { track } from '../../lib/usage';
 import { useResources } from '../../lib/resources';
 import type { Ctx, QrIntent } from '../App';
 import { DayStrip, StateLegend } from '../AvailabilityBits';
@@ -47,6 +48,7 @@ export function BookScreen({ ctx, intent, clearIntent, online }: Props) {
   const [stay, setStayState] = useState<string>(() => rememberedStay() ?? 'd240');
   const setStay = (code: string) => { setStayState(code); rememberStay(code); };
   const [view, setView] = useState<'map' | 'list'>('map');
+  useEffect(() => { if (view === 'map') track('map'); }, [view]);
   const [search, setSearch] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);

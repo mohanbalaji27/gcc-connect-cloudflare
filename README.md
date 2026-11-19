@@ -2,7 +2,7 @@
 
 A friendly, hobby-grade office companion: book desks and rooms on the real floor plan, scan QR codes, join events, see the food menu, send kudos, vote in polls, and keep the important links and phone numbers in one place. It is independent of any company system. React + Vite front end, Express API, PostgreSQL database.
 
-> **Status:** works end to end on a laptop and is built to deploy to Cloudflare Workers. Before real employee data goes in, read [Production checklist](#production-checklist) â€” sign-in is still email + password (no company SSO yet).
+> **Status:** works end to end on a laptop and is built to deploy to Cloudflare Workers. Before real employee data goes in, read [Production checklist](#production-checklist) — sign-in is still email + password (no company SSO yet).
 
 ## What you get
 
@@ -30,20 +30,22 @@ A friendly, hobby-grade office companion: book desks and rooms on the real floor
 - **Role templates:** built in and editable (they cannot be deleted, and no role can be deleted while people hold it): *Employee* (the default for everybody), *Facility staff* (simple big-button home), *Facility manager*, *Cafeteria / food manager*, *HR / People team*, *Receptionist / front desk*, *Floor warden*, *Admin*, and *Super admin* (shown for reference; give it with the Role field). Four older starters (HR partner, Facilities, Leader, Culture crew) stay. A role is **what you can do + default notifications + landing experience**; clone one to start a new one.
 - **Facility issue box:** a separate feature (switch: *Issue box*) from the idea box. See [Issue box](#issue-box) and [Notifications](#notifications) below.
 - **Facility staff and employee IDs:** a role can switch on a **simple big-button home** (`simple_ui`): *My tasks*, the unassigned queue (if the role may see it), big **Start / Done / Need help** buttons, scan QR, contacts and the menu; the rest of the navigation is hidden. It is a simpler screen, not a security boundary: what people may do is decided by their permissions on the server. People **without a work email** can sign in with a **username / employee ID** (3 to 32 letters, numbers, dots, dashes or underscores; unique, case-insensitive): a user manager sets it under Manage → People, the same password rules and forced first-time password change apply, and the sign-in box accepts either. A wrong name and a wrong password get the same answer, and attempts are rate limited.
-- **Everything is switchable:** Manage → Settings lets a super admin turn each feature on or off (links, contacts, menu, announcements, **issue box**, kudos, polls, celebrations, **idea box**, who's in, points) and set the app name, tagline, welcome note and default colour theme. A few extra options sit under Options: **Show who booked** (names in availability details, off by default) and **“I’m going” on events** (turn off to hide the button and the going counts; the server also refuses RSVPs) and **Issue photos** (on by default). Kudos is optional: it is **off for brand-new installs only**, and installs that already exist keep exactly the setting they have (migration 006 writes it down). Changes reach other people within a few minutes.
+- **Everything is switchable:** Manage → Settings lets a super admin turn each feature on or off (links, contacts, menu, announcements, **issue box**, kudos, polls, celebrations, **idea box**, who's in, points) and set the app name, tagline, welcome note and default colour theme. A few extra options sit under Options: **Show who booked** (names in availability details, off by default) and **“I’m going” on events** (turn off to hide the button and the going counts; the server also refuses RSVPs), **Issue photos** (on by default), **Home contacts** (on by default; with how many contacts to show) and **Usage analytics** (on by default; with how long to keep the data). Kudos is optional: it is **off for brand-new installs only**, and installs that already exist keep exactly the setting they have (migration 006 writes it down). Changes reach other people within a few minutes.
 - **Useful stuff:** links to user guides and portals (payments, insurance, anything), an important-contacts directory with tap-to-call and email, announcements on the home page, and links on events.
 - **Food menu:** a "grand hotel" menu card for everyone, and a fast editor for the food team. See [Food menu](#food-menu) below.
 - **Community:** an optional kudos wall with badges and cheers, polls, birthdays and work anniversaries (birthdays are opt-in), and an anonymous **idea box** (ideas and suggestions only) for HR and leaders.
 - **Who's in today**, a visit streak, points, levels and badges, "Sit with my team" and "Surprise me" seat pickers, dark mode, colour themes and emoji avatars.
-- **Insights dashboard** for leaders: desk and room use, booking trends, busiest days, team seat use, most booked spaces, engagement, and plain-English highlights.
-- **Teams are fully configurable** (Manage â†’ Map & teams): create/rename/recolour teams, box-select seats on the map or type a range like `Z001-Z020`, then assign. The seat list from the Excel workbook is only the starting point.
+- **Insights dashboard** for leaders (Manage → Dashboard): *Bookings and office* (desk and room use, booking trends, busiest days, team seat use, most booked spaces, with an **i** button next to every number saying exactly what it counts) and *Usage* (logins per day, daily / weekly / monthly active people, which features are used and which are not, peak hours, new vs returning people). See [Analytics](#analytics).
+- **Recent activity with filters** (Manage → Activity): by person, by date (today, 7 or 30 days, custom), by area (bookings, events, spaces, map, teams, people, roles, settings, food menu, content, issue box, community, security, sign-ins) and by text, with a total count, "Show older entries" paging and a CSV export that follows the filters. Every entry is a plain sentence ("Zed Admin edited Yan Manager (permissions changed)"). Sign-ins are merged in from their own table, so they never flood the log.
+- **Important contacts on Home:** a card with tap-to-call and email buttons. Admins tick **Show on Home** on the contacts to feature (if none are ticked, the first *Emergency* contacts are shown); a super admin switches the card on or off and chooses how many (1 to 6) under Settings → Options.
+- **Teams are fully configurable** (Manage → Map & teams): create/rename/recolour teams, box-select seats on the map or type a range like `Z001-Z020`, then assign. The seat list from the Excel workbook is only the starting point.
 - **Map gestures:** scroll wheel zooms toward the cursor, drag to pan, pinch with two fingers on a phone.
 - **Stay options:** besides 1 to 8 hours you can book until 5 pm, 8 pm or midnight. The seat panel lets you change date, arrival and stay and shows live availability. Admins can set a suggested stay on a QR, and each person's last choice is remembered.
 - **Availability before you click:** pick a date, arrival time and stay and the map instantly colours every seat and room (free, booked at your time, yours, not available). Hover (desktop) or tap (phone) for details such as "Booked 9:00 am – 1:00 pm, free from 1:00 pm" or "Free until 3:00 pm"; rooms also show a small day timeline. Changing the time or stay never calls the server: one compact `GET /api/availability?date=` per date is cached in the browser. Your own booking or cancellation updates the map at once; the day is re-checked when the tab comes back to the front, and a 409 conflict explains when the space is free again. Who booked is hidden unless a super admin turns on **Show who booked** (managers with `bookings.view_all` always see names).
 - **Seat numbers placed smartly:** each seat number goes on the side with the most free space (top, bottom, left or right), shrinks or hides where it would collide and appears as you zoom in. Override a seat in **Manage → Map & teams** (Selection → "Seat number goes on the…").
 - **QR stickers** show the seat or room name under the code.
 - **Save button for the map:** moving seats and changing teams is staged until you press **Save changes** (or **Discard**). A save is written to the activity log.
-- **Exports:** the activity log and the bookings list export as CSV (Manage â†’ Activity and Bookings), with optional date ranges for the log.
+- **Exports:** the activity log (with the filters you chose, up to 5,000 rows) and the bookings list export as CSV (Manage → Activity and Bookings), with optional date ranges.
 - **Export PDF:** one click produces an A3 PDF of the office plan with every seat coloured by team, a legend, and a second page listing seat numbers per team.
 
 ## Run it locally
@@ -70,7 +72,7 @@ The demo database also has a few issues and notifications. `npm run db:reset` re
 
 ### Database: PostgreSQL everywhere
 
-Hosted databases (Neon, Supabase, Railway ...) are PostgreSQL, so that is what runs locally â€” no SQLite. With no `DATABASE_URL`, the app runs [PGlite](https://pglite.dev) (a real PostgreSQL compiled to WebAssembly, no install needed) and keeps its files in `data/pglite/`. Set `DATABASE_URL` and the same code talks to any PostgreSQL server through the standard `pg` driver, so nothing changes when you move.
+Hosted databases (Neon, Supabase, Railway ...) are PostgreSQL, so that is what runs locally — no SQLite. With no `DATABASE_URL`, the app runs [PGlite](https://pglite.dev) (a real PostgreSQL compiled to WebAssembly, no install needed) and keeps its files in `data/pglite/`. Set `DATABASE_URL` and the same code talks to any PostgreSQL server through the standard `pg` driver, so nothing changes when you move.
 
 ```powershell
 npm.cmd run db:reset        # wipe the local database; the next start reseeds it
@@ -92,10 +94,10 @@ Both files are private and are **never committed** (`local-data/` and `data/` ar
    npm.cmd run map:seats
    ```
 
-   The first command writes `local-data/seat-inventory.json` (seat numbers, team ranges, grid cells). The second finds the 12 Ã— 24 pt desk rectangles drawn in the PDF (184 in this plan) and matches them to the workbook seats, adding `x`/`y` positions. If a seat lands on the wrong desk, drag it in **Manage â†’ Map & teams**; it saves instantly.
+   The first command writes `local-data/seat-inventory.json` (seat numbers, team ranges, grid cells). The second finds the 12 × 24 pt desk rectangles drawn in the PDF (184 in this plan) and matches them to the workbook seats, adding `x`/`y` positions. If a seat lands on the wrong desk, drag it in **Manage → Map & teams**; it saves instantly.
 3. `npm.cmd run db:reset` then `npm.cmd run dev` to load them.
 
-The same two files can be loaded into a running (or deployed) app from **Manage â†’ Map & teams â†’ Plan & seats**: upload the PDF and the seat JSON. The PDF is stored privately in the database and only served after sign-in.
+The same two files can be loaded into a running (or deployed) app from **Manage → Map & teams → Plan & seats**: upload the PDF and the seat JSON. The PDF is stored privately in the database and only served after sign-in.
 
 ## Food menu
 
@@ -152,10 +154,43 @@ The bell (top bar, and the sidebar on desktop) opens a notification centre with 
 
 **Preferences** (Me and settings -> Notifications) are a checkbox matrix of type by channel, plus, for people who can see the issue queue, the issue categories they follow. What someone receives is *their own choice, else their role's default, else the type's default*, and only for things their permissions let them open. Roles carry default notification subscriptions (Manage -> Roles). **Browser push is not delivered yet:** the data model stores a `push` choice per type, the channel is marked *coming soon* in the catalogue (`available: false`) and the UI hides it. Doing it properly needs VAPID web push from the Worker (payload encryption and a push-service call per recipient), which does not fit comfortably inside the free plan's 10 ms CPU per request; the plan is to send pushes from a Cron Trigger or a queue consumer.
 
+## Analytics
+
+Two parts, both behind `insights.view` (Manage → Dashboard). Windows are **office days in India time**; "last 30 days" means the 30 days ending today, today included. Every figure in the app has an **i** button that shows the definition below.
+
+**Bookings and office** (`GET /api/admin/insights`; the ETag changes exactly when a number changes, and every query includes `now()` so a Hyperdrive cache never serves stale numbers):
+
+| Number | What it counts |
+|---|---|
+| Desk use / Room use today | booked time ÷ available time during office hours (9:00 to 18:00) across all *active* desks / rooms: seat-time, not "how many seats were touched". Also shown: how many seats have any booking today |
+| People who booked (30 days) | active accounts with at least one confirmed booking starting in the window (suspended people excluded) |
+| Bookings (30 days) | confirmed bookings starting in the window, desk and room shown separately; history on later-retired spaces still counts |
+| Cancellations (30 days) | bookings cancelled in the window, by **cancel time** (`bookings.cancelled_at`, stamped on every cancellation; older ones are back-filled from the activity log, else they fall back to the booking time) |
+| Desk coverage | share of active desks used at least once in the window |
+| Trend | bookings per start day: 14 past days (today included) and the next 7 days |
+| Busiest weekdays | average desk bookings per weekday over 60 days (an average, because weekdays occur 8 or 9 times) |
+| Team seat use / Most booked spaces | desk bookings per assigned desk / top active spaces, 30 days |
+| Kudos, poll votes, new ideas, RSVPs | hidden (not zero) when that feature or option is off; poll votes are counted by when they were cast (`poll_votes.voted_at`) |
+
+All ratios guard against dividing by zero, and a test seeds bookings across IST midnight, retired spaces and suspended people and checks every number.
+
+**Usage** (`GET /api/admin/usage?days=30` or `?from=&to=`; 7, 30, 90 days or custom, CSV download in the browser): sign-ins per day with active people, daily / weekly / monthly active people and stickiness (average daily ÷ monthly), most used features by people and by opens with a ▲/▼ trend against the previous period, features nobody opened ("try promoting these"), peak hours, new vs returning people and how many of the last period came back, and adoption by team (teams under three people are merged so nobody can be singled out).
+
+### Usage analytics and privacy
+
+- **Collected:** how many times each person opened each screen (or tab) per office day (`usage_daily`, a whitelist of about 20 features such as Home, Book, Map, Events, Menu, Links, Contacts, Polls, Issues), one total per hour of the day with nobody attached (`usage_hourly`), and who signed in when (`login_events`, shown as *Sign-ins* in the activity log). **Never collected:** clicks, what anyone typed, read, booked or searched, IP addresses, devices or locations. The dashboard only shows totals.
+- **How it is sent:** the browser counts in memory (one count per screen view, repeats within 10 seconds ignored) and attaches the counts to the heartbeat it already makes every few minutes (`POST /api/pulse`, only when there is something to send and at most every 2 minutes), plus one `navigator.sendBeacon` to `POST /api/usage` when the page is hidden. Never one call per click. The server whitelists feature names (unknown ones are dropped), caps counts and batch size, rate limits per person and upserts one row per person, feature and day.
+- **Switch:** Settings → Options → *Count which screens people open*. When off the browser sends nothing and the server stores nothing even if asked. Sign-ins are part of the security log and are always recorded.
+- **Retention:** usage rows and sign-ins older than *Days to keep usage data* (30 to 1095, default 400) are deleted automatically once a day (see [`docs/OPERATIONS.md`](docs/OPERATIONS.md)). The same text is shown to the super admin in Settings.
+
+## Activity log
+
+Manage → Activity (`users.audit`) merges two sources into one filterable feed: `audit_log` (one row per important change) and `login_events` (sign-ins). Filters: person, date range, area, text; paging uses a cursor (`before`) so entries are never repeated or skipped, and the total comes with the first page. Areas come from the action prefix (`booking.*` → Bookings, `menu.*` → Food menu, and so on; see `server/activity.js`, where each known action also has its friendly sentence; unknown actions still show up under *Other*). Logged writes include bookings, events, spaces and the map, teams, people and role changes, roles, settings (naming what changed), menu saves and deletes, links, contacts, announcements, polls, ideas, issue changes and routing, password changes, and a **burst of failed sign-ins** (once per burst, not once per try). The CSV export takes the same filters and is capped at 5,000 rows.
+
 ## How the app keeps server calls low
 
-- **One call after sign-in:** `GET /api/bootstrap` returns the settings (feature switches, branding, options), teams, map info, floor-plan version and your summary, with an ETag. The old endpoints (`/config`, `/teams`, `/map`, `/me/summary`) still work.
-- **A tiny heartbeat:** `GET /api/pulse` returns `{ configVersion, serverTime, notifications: { unread } }`. The browser calls it when a tab comes back to the front and then every 3 minutes, only while the tab is visible. Anything an admin changes in Settings, branding, teams, spaces or the map bumps `configVersion` (it is also sent in an `X-Config-Version` header on every response), and a browser that sees a new number reloads bootstrap. So switching the Kudos wall off or on reaches other people within a few minutes, without a manual refresh, and the admin's own screen updates immediately. The **notification bell's unread count rides on it** (and on `/api/bootstrap` at sign-in), so the bell costs no extra request; the list is fetched only when the bell is opened. To add something else to the heartbeat, register it on the server with `app.locals.pulse.add('name', async (req) => value)`; keep it to one cheap query. Clients read the extra fields from the same reply (`startPulse` in `src/lib/pulse.ts`).
+- **One call after sign-in:** `GET /api/bootstrap` returns the settings (feature switches, branding, options), teams, map info, floor-plan version, your summary and the few **Home contacts**, with an ETag. The Home card therefore costs no request of its own; editing a contact bumps the settings version so open apps refresh. The old endpoints (`/config`, `/teams`, `/map`, `/me/summary`) still work.
+- **A tiny heartbeat:** `GET /api/pulse` returns `{ configVersion, serverTime, notifications: { unread } }`. The browser calls it when a tab comes back to the front and then every 3 minutes, only while the tab is visible. When screen-open counts are waiting (usage analytics) the call is a `POST /api/pulse` carrying them, with the same reply, so analytics add no request. Anything an admin changes in Settings, branding, teams, spaces or the map bumps `configVersion` (it is also sent in an `X-Config-Version` header on every response), and a browser that sees a new number reloads bootstrap. So switching the Kudos wall off or on reaches other people within a few minutes, without a manual refresh, and the admin's own screen updates immediately. The **notification bell's unread count rides on it** (and on `/api/bootstrap` at sign-in), so the bell costs no extra request; the list is fetched only when the bell is opened. To add something else to the heartbeat, register it on the server with `app.locals.pulse.add('name', async (req) => value)`; keep it to one cheap query. Clients read the extra fields from the same reply (`startPulse` in `src/lib/pulse.ts`).
 - **Spaces are cached by version:** the list of desks and rooms is fetched once and re-fetched only when `configVersion` changes; availability is fetched per date as described above.
 - **Migrations:** `server/migrations/NNN-name.sql` must be additive. The Worker's bundled list is generated (`npm run migrations:gen`, run by `cf:dev`/`cf:deploy`) and a test fails if it is stale.
 
@@ -167,13 +202,13 @@ Try the Worker on your laptop first (no Cloudflare account needed): `npm run cf:
 
 ## Production checklist
 
-- [ ] Company SSO (Microsoft Entra ID / OIDC) instead of passwords, plus MFA â€” **not implemented**.
-- [ ] Privacy, security and accessibility review; retention policy for bookings and the activity log.
+- [ ] Company SSO (Microsoft Entra ID / OIDC) instead of passwords, plus MFA — **not implemented**.
+- [ ] Privacy, security and accessibility review; retention policy for bookings and the activity log (usage data already has one, see Analytics).
 - [ ] Backups and a tested restore ([`docs/OPERATIONS.md`](docs/OPERATIONS.md)).
 - [ ] Remove demo data (`SEED_DEMO=false` is the production default) and change the bootstrap password after first sign-in.
 - [ ] Persistent/distributed rate limiting if you run more than one replica (limits are per process today).
 
-More: [`docs/THREAT-MODEL.md`](docs/THREAT-MODEL.md) Â· [`docs/OPERATIONS.md`](docs/OPERATIONS.md) Â· [`docs/openapi.yaml`](docs/openapi.yaml)
+More: [`docs/THREAT-MODEL.md`](docs/THREAT-MODEL.md) · [`docs/OPERATIONS.md`](docs/OPERATIONS.md) · [`docs/openapi.yaml`](docs/openapi.yaml)
 
 ## Project layout
 
@@ -182,5 +217,5 @@ server/        Express API, PostgreSQL access (pg / PGlite), migrations, seat im
 worker/        Cloudflare Worker entry + per-request PostgreSQL adapter (wrangler.jsonc configures it)
 src/           React UI (screens, floor map, PDF export)
 scripts/       workbook importer, desk detector, db reset, pg driver check
-test/          API tests (permissions, issues, notifications, booking races, QR, import â€¦)
+test/          API tests (permissions, issues, notifications, analytics, activity filters, booking races, QR, import …)
 ```

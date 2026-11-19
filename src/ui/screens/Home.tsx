@@ -2,6 +2,7 @@
 import type { Announcement, Booking, Celebration, FeatureKey, LinkItem, MenuItem, OfficeEvent, Summary, Vibes, WhosIn } from '../../lib/types';
 import { MEALS } from '../../lib/types';
 import { api } from '../../lib/api';
+import { track } from '../../lib/usage';
 import { currentMeal } from '../../lib/menuCatalog';
 import { loadMenu } from '../../lib/menuData';
 import { greeting, inIndia, relativeDay, timeRange, todayInIndia } from '../../lib/format';
@@ -72,6 +73,9 @@ export function HomeScreen({ ctx }: { ctx: Ctx }) {
     ]).then(([s, b, e, n, m, w, c, l, v]) => {
       if (!alive) return;
       setSummary(s); setBookings(b.bookings); setEvents(e.events); setNews(n.announcements); setMenu(m.items); setWhos(w); setCelebrations(c.celebrations); setLinks(l.links); setVibes(v);
+      // Usage analytics: these two cards are only "seen on Home" when they have something to show.
+      if (n.announcements.length) track('announcements');
+      if (w) track('whosin');
     }).catch(() => { toast('Some of your dashboard could not load. Pull to refresh in a moment.', 'error'); setBookings([]); });
     return () => { alive = false; };
   }, [ctx.config, ctx.getSummary, today, toast]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -208,6 +212,24 @@ export function HomeScreen({ ctx }: { ctx: Ctx }) {
           </section>
         )}
       </div>
+
+      {ctx.flag('contacts') && ctx.config.options.homeContacts !== false && ctx.homeContacts.length > 0 && (
+        <section className="panel home-contacts" aria-labelledby="home-contacts-title">
+          <div className="panel-head"><h2 id="home-contacts-title">Important contacts</h2><button className="text-link" onClick={() => ctx.go('useful')}>All contacts <Icon name="arrow" size={16} /></button></div>
+          <ul className="hc-list">
+            {ctx.homeContacts.map((contact) => (
+              <li key={contact.id} className="hc-item">
+                <span className="hc-emoji" aria-hidden="true">{contact.emoji}</span>
+                <div className="hc-text"><strong>{contact.name}</strong><small>{[contact.role_title, contact.phone, contact.hours].filter(Boolean).join(' · ')}</small></div>
+                <div className="hc-actions">
+                  {contact.phone && <a className="button button-small button-primary" href={`tel:${contact.phone.replace(/[^+\d]/g, '')}`} aria-label={`Call ${contact.name} on ${contact.phone}`}><Icon name="phone" size={15} /> Call</a>}
+                  {contact.email && <a className="button button-small" href={`mailto:${contact.email}`} aria-label={`Email ${contact.name}`}><Icon name="mail" size={15} /> Email</a>}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       {ctx.flag('links') && links.length > 0 && (
         <section className="panel">

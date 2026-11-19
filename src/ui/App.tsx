@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { AppConfig, Bootstrap, Branding, FeatureKey, MapInfo, Summary, Team, User } from '../lib/types';
+import type { AppConfig, Bootstrap, Branding, FeatureKey, HomeContact, MapInfo, Summary, Team, User } from '../lib/types';
 import { api, ApiError, messageOf, onConfigVersion, setCsrf } from '../lib/api';
 import { startPulse } from '../lib/pulse';
+import { resetUsage, setUsageEnabled, startUsage, track, type UsageFeature } from '../lib/usage';
 import { clearAvailability } from '../lib/availability';
 import { clearResources } from '../lib/resources';
 import { clearMenu } from '../lib/menuData';
@@ -24,11 +25,14 @@ import { IssuesScreen, type IssueFocus } from './screens/Issues';
 import { StaffHome } from './screens/StaffHome';
 import { NotificationBell, NotificationSheet } from './Notifications';
 import './issues.css';
+import './analytics.css';
 
 export type Screen = 'home' | 'book' | 'bookings' | 'events' | 'scan' | 'manage' | 'account' | 'menu' | 'community' | 'useful' | 'more' | 'issues';
 export type NavItem = [Screen, string, string];
 export interface QrIntent { resourceId: string; token?: string; stay?: string; report?: boolean }
 const DEFAULT_BRANDING: Branding = { appName: 'GCC Connect', tagline: 'Your office day, sorted.', accent: 'green', welcome: '' };
+// Screens that count as one feature each. Community and Useful stuff count per tab instead (kudos, polls, links, contacts...).
+const SCREEN_FEATURE: Partial<Record<Screen, UsageFeature>> = { home: 'home', book: 'booking', bookings: 'my_bookings', events: 'events', scan: 'scan', menu: 'menu', issues: 'issues', account: 'account', manage: 'manage', more: 'more' };
 
 export interface Ctx {
   user: User;
@@ -45,6 +49,8 @@ export interface Ctx {
   teams: Team[];
   unassignedSeats: number;
   mapInfo: MapInfo | null;
+  /** The few contacts the Home card shows (already part of the bootstrap, so Home makes no request for them). */
+  homeContacts: HomeContact[];
   reloadTeams: () => Promise<void>;
   reloadMap: () => Promise<void>;
   reloadPlan: () => Promise<void>;
@@ -71,6 +77,7 @@ function Shell() {
   const [branding, setBranding] = useState<Branding>(DEFAULT_BRANDING);
   const [configVersion, setConfigVersion] = useState(0);
   const [unread, setUnread] = useState(0);
+  const [homeContacts, setHomeContacts] = useState<HomeContact[]>([]);
   const [bellOpen, setBellOpen] = useState(false);
   const [issueFocus, setIssueFocus] = useState<IssueFocus | null>(null);
   const knownVersion = useRef(0);
@@ -99,6 +106,7 @@ function Shell() {
     slice('config', boot.config, (next) => { setConfig(next); setBranding(next.branding); clearMenu(); });
     slice('teams', { teams: boot.teams, unassigned: boot.unassignedSeats }, (next) => { setTeams(next.teams); setUnassignedSeats(next.unassigned); });
     slice('map', boot.map, setMapInfo);
+    slice('homeContacts', boot.homeContacts ?? [], setHomeContacts);
     summaryCache.current = { value: boot.summary, at: Date.now() };
     setUnread(boot.unread ?? 0);
     if (boot.map.floorPlanAvailable && planVersion.current !== boot.map.floorPlanVersion) {
@@ -163,7 +171,7 @@ function Shell() {
   useEffect(() => {
     if (!ready) return undefined;
     void reloadBootstrap().catch(() => {
-      setConfig((current) => current ?? { features: { links: true, contacts: true, menu: true, announcements: true, issues: true, kudos: false, polls: true, celebrations: true, feedback: true, whosin: true, vibes: true }, branding: DEFAULT_BRANDING, options: { showBookerNames: false, eventsRsvpEnabled: true, issuePhotosEnabled: true }, featureCatalog: {} as AppConfig['featureCatalog'], optionCatalog: {} as AppConfig['optionCatalog'], accents: ['green', 'ocean', 'sunset', 'berry', 'mono'], menuReviewsVisibility: 'summary', menuHistoryDays: 7, permissionCatalog: { groups: [], adminDefaults: [] }, notificationCatalog: { channels: [], types: [] } });
+      setConfig((current) => current ?? { features: { links: true, contacts: true, menu: true, announcements: true, issues: true, kudos: false, polls: true, celebrations: true, feedback: true, whosin: true, vibes: true }, branding: DEFAULT_BRANDING, options: { showBookerNames: false, eventsRsvpEnabled: true, issuePhotosEnabled: true, homeContacts: true, usageAnalytics: true }, featureCatalog: {} as AppConfig['featureCatalog'], optionCatalog: {} as AppConfig['optionCatalog'], accents: ['green', 'ocean', 'sunset', 'berry', 'mono'], menuReviewsVisibility: 'summary', menuHistoryDays: 7, usageRetentionDays: 400, homeContactsCount: 4, permissionCatalog: { groups: [], adminDefaults: [] }, notificationCatalog: { channels: [], types: [] } });
     });
     // Any response that reports a newer settings version, and the periodic pulse, both end up here.
     const noticed = (version: number) => { if (knownVersion.current > 0 && version !== knownVersion.current) void reloadBootstrap().catch(() => {}); };
@@ -176,6 +184,12 @@ function Shell() {
     } });
     return () => { onConfigVersion(null); stopPulse(); };
   }, [ready, reloadBootstrap]);
+
+  // Usage analytics (counts of screens opened, see lib/usage.ts): on only while the super admin keeps it switched on.
+  const usageOn = ready && config !== null && config.options.usageAnalytics !== false;
+  useEffect(() => { setUsageEnabled(usageOn); }, [usageOn]);
+  useEffect(() => (usageOn ? startUsage() : undefined), [usageOn]);
+  useEffect(() => { const feature = SCREEN_FEATURE[screen]; if (usageOn && feature) track(feature); }, [screen, usageOn]);
 
   const resetSession = useCallback(() => {
     setCsrf('');
@@ -192,6 +206,8 @@ function Shell() {
     setConfig(null);
     setConfigVersion(0);
     setUnread(0);
+    setHomeContacts([]);
+    resetUsage();
     setBellOpen(false);
     setUser(null);
   }, []);
@@ -221,6 +237,7 @@ function Shell() {
   const go = useCallback((next: Screen) => { setScreen(next); window.scrollTo({ top: 0, behavior: 'smooth' }); }, []);
   const clearIntent = useCallback(() => setIntent(null), []);
   const clearIssueFocus = useCallback(() => setIssueFocus(null), []);
+  const openBell = useCallback(() => { track('notifications'); setBellOpen(true); }, []);
   const startBooking = useCallback((next: QrIntent | { kind: 'desk' | 'room' }) => { setIntent(next); setScreen('book'); window.scrollTo({ top: 0 }); }, []);
   const openIssue = useCallback((id: string) => { setIssueFocus({ issueId: id }); setScreen('issues'); window.scrollTo({ top: 0 }); }, []);
   const openNotificationLink = useCallback((link: string) => {
@@ -238,9 +255,9 @@ function Shell() {
 
   const ctx: Ctx | null = useMemo(
     () => (user && ready && config
-      ? { user, config, configVersion, flag: (key: FeatureKey) => config.features[key] !== false, reloadConfig: reloadBootstrap, getSummary, invalidateSummary, updateUser: setUser, plan, planLoading, teams, unassignedSeats, mapInfo, reloadTeams: reloadBootstrap, reloadMap: reloadBootstrap, reloadPlan, go, startBooking, openIssue }
+      ? { user, config, configVersion, flag: (key: FeatureKey) => config.features[key] !== false, reloadConfig: reloadBootstrap, getSummary, invalidateSummary, updateUser: setUser, plan, planLoading, teams, unassignedSeats, mapInfo, reloadTeams: reloadBootstrap, reloadMap: reloadBootstrap, reloadPlan, go, startBooking, openIssue, homeContacts }
       : null),
-    [user, ready, config, configVersion, plan, planLoading, teams, unassignedSeats, mapInfo, reloadBootstrap, getSummary, invalidateSummary, reloadPlan, go, startBooking, openIssue],
+    [user, ready, config, configVersion, plan, planLoading, teams, unassignedSeats, mapInfo, reloadBootstrap, getSummary, invalidateSummary, reloadPlan, go, startBooking, openIssue, homeContacts],
   );
 
   if (booting) return <div className="boot"><Spinner label="Warming up" /></div>;
@@ -290,7 +307,7 @@ function Shell() {
       <aside className="sidebar">
         <div className="sidebar-top">
           <div className="brand"><span className="brand-mark"><Icon name="sparkle" size={20} /></span>{brand}</div>
-          <NotificationBell unread={unread} onClick={() => setBellOpen(true)} />
+          <NotificationBell unread={unread} onClick={openBell} />
         </div>
         <nav aria-label="Primary">
           {nav.map(([id, label, icon]) => (
@@ -310,7 +327,7 @@ function Shell() {
           <div className="brand compact"><span className="brand-mark"><Icon name="sparkle" size={18} /></span>{brand}</div>
           <div className="topbar-right">
             {!online && <span className="pill pill-warn">Offline</span>}
-            <NotificationBell unread={unread} onClick={() => setBellOpen(true)} />
+            <NotificationBell unread={unread} onClick={openBell} />
             <button className="icon-avatar" onClick={() => go('account')} aria-label="Account settings"><Avatar name={user.name} emoji={user.avatar} size={36} /></button>
           </div>
         </header>

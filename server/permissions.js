@@ -45,7 +45,7 @@ export const PERMISSION_GROUPS = [
     { id: 'notifications.route', label: 'Choose who is notified', description: 'Decide which people and roles are notified, escalated to or assigned for each issue category.' },
   ] },
   { id: 'insights', label: 'Insights', icon: 'chart', permissions: [
-    { id: 'insights.view', label: 'See the insights dashboard', description: 'Usage numbers, trends and activity.' },
+    { id: 'insights.view', label: 'See the insights dashboard', description: 'Bookings, usage and sign-in numbers and trends.' },
   ] },
   { id: 'people', label: 'People and access', icon: 'users', permissions: [
     { id: 'users.view', label: 'See the people list', description: 'Open the People screen.', grant: 'super' },

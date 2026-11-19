@@ -461,6 +461,7 @@ export function registerMenu({ app, db, requireAuth, requireCsrf, requirePermiss
   app.delete('/api/admin/menu/:id', requirePermission('menu.edit'), requireCsrf, async (req, res) => {
     const result = await db.query('DELETE FROM menu_items WHERE id = $1 RETURNING name', [req.params.id]);
     if (!result.rows.length) throw fail(404, 'NOT_FOUND', 'That dish is already gone.');
+    await audit(db, req.user.id, 'menu.deleted', req.params.id, result.rows[0].name);
     res.status(204).end();
   });
 

@@ -18,6 +18,39 @@ test('migrations only add things (no destructive statements)', () => {
   }
 });
 
+test('migration 008 stamps old cancellations from the activity log and votes from their polls, leaves the rest alone, and can be re-run', async () => {
+  const { PGlite } = await import('@electric-sql/pglite');
+  const { migrate, readMigrationFiles } = await import('../server/setup.js');
+  const lite = new PGlite('memory://');
+  await lite.waitReady;
+  const db = { query: (sql, params) => lite.query(sql, params), exec: (sql) => lite.exec(sql), tx: (fn) => lite.transaction((client) => fn({ query: (sql, params) => client.query(sql, params), exec: (sql) => client.exec(sql) })) };
+  try {
+    const all = readMigrationFiles();
+    await migrate(db, all.filter((migration) => migration.version < 8));
+    await db.query("INSERT INTO employees (id, email, name, role, password_hash) VALUES ('e1', 'e1@x.gcc', 'E One', 'user', 'x')");
+    await db.query("INSERT INTO resources (id, type, label, building, floor) VALUES ('r1', 'desk', 'D1', 'HQ', '1')");
+    const booking = (id, status) => db.query("INSERT INTO bookings (id, employee_id, resource_id, starts_at, ends_at, status, created_at) VALUES ($1,'e1','r1', $2, $3, $4, '2026-01-01T00:00:00Z')", [id, new Date('2026-02-01T05:00:00Z'), new Date('2026-02-01T06:00:00Z'), status]);
+    await booking('b-logged', 'cancelled'); await booking('b-bulk', 'cancelled'); await booking('b-live', 'confirmed');
+    await db.query("INSERT INTO audit_log (id, actor_id, action, entity_id, created_at) VALUES ('a1', 'e1', 'booking.cancelled', 'b-logged', '2026-01-20T10:00:00Z')");
+    await db.query("INSERT INTO polls (id, question, options, created_at) VALUES ('p1', 'Q', '[\"a\",\"b\"]'::jsonb, '2026-01-05T00:00:00Z')");
+    await db.query("INSERT INTO poll_votes (poll_id, employee_id, option_index) VALUES ('p1', 'e1', 0)");
+    await migrate(db, all);
+    await migrate(db, all);
+    const rows = Object.fromEntries((await db.query('SELECT id, cancelled_at FROM bookings')).rows.map((row) => [row.id, row.cancelled_at]));
+    assert.equal(new Date(rows['b-logged']).toISOString(), '2026-01-20T10:00:00.000Z', 'the exact cancel time comes from the activity log');
+    assert.equal(rows['b-bulk'], null, 'unknown stays unknown (reports fall back to the booking time)');
+    assert.equal(rows['b-live'], null);
+    assert.equal(new Date((await db.query('SELECT voted_at FROM poll_votes')).rows[0].voted_at).toISOString(), '2026-01-05T00:00:00.000Z');
+    await db.query("INSERT INTO employees (id, email, name, role, password_hash) VALUES ('e2', 'e2@x.gcc', 'E Two', 'user', 'x')");
+    await db.query("INSERT INTO poll_votes (poll_id, employee_id, option_index) VALUES ('p1', 'e2', 1)");
+    assert.ok((await db.query("SELECT voted_at FROM poll_votes WHERE employee_id = 'e2'")).rows[0].voted_at, 'new votes are stamped');
+    assert.equal((await db.query("SELECT pin_to_home FROM contacts LIMIT 1")).rows.length, 0);
+    assert.equal((await db.query("SELECT 1 FROM pg_indexes WHERE indexname = 'audit_action_idx'")).rows.length, 1);
+  } finally {
+    await lite.close();
+  }
+});
+
 test('migration 005 keeps existing menu rows and likes, maps them to sections, and can be re-run safely', async () => {
   const { PGlite } = await import('@electric-sql/pglite');
   const { migrate, readMigrationFiles } = await import('../server/setup.js');

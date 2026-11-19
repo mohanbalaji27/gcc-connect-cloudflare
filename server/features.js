@@ -25,8 +25,13 @@ export const OPTION_KEYS = {
   showBookerNames: 'Show who booked a seat or room in availability details',
   eventsRsvpEnabled: 'Let people tap “I’m going” on events',
   issuePhotosEnabled: 'Let people attach one small photo to an issue report',
+  homeContacts: 'Show an Important contacts card on Home',
+  usageAnalytics: 'Count which screens people open (usage analytics)',
 };
-export const DEFAULT_OPTIONS = { showBookerNames: false, eventsRsvpEnabled: true, issuePhotosEnabled: true };
+export const DEFAULT_OPTIONS = { showBookerNames: false, eventsRsvpEnabled: true, issuePhotosEnabled: true, homeContacts: true, usageAnalytics: true };
+// Plain numbers set by the super admin (stored together under "general_settings").
+export const GENERAL_LIMITS = { usageRetentionDays: [30, 1095], homeContactsCount: [1, 6] };
+export const DEFAULT_GENERAL = { usageRetentionDays: 400, homeContactsCount: 4 };
 export const ACCENTS = ['green', 'ocean', 'sunset', 'berry', 'mono'];
 export const DEFAULT_BRANDING = { appName: 'GCC Connect', tagline: 'Your office day, sorted.', accent: 'green', welcome: '' };
 export const KUDOS_BADGES = ['star', 'team', 'idea', 'fire', 'helper', 'coffee'];
@@ -64,14 +69,20 @@ export function registerFeatures({ app, db, requireAuth, requireSignedIn, requir
     };
   };
 
+  const generalSettings = (stored) => {
+    const merged = { ...DEFAULT_GENERAL, ...(stored ?? {}) };
+    return Object.fromEntries(Object.entries(GENERAL_LIMITS).map(([key, [min, max]]) => [key, Number.isInteger(merged[key]) && merged[key] >= min && merged[key] <= max ? merged[key] : DEFAULT_GENERAL[key]]));
+  };
+
   async function readSettings() {
-    const rows = (await db.query("SELECT key, value, now() AS read_at FROM app_settings WHERE key IN ('features', 'branding', 'options', 'menu_settings')")).rows;
+    const rows = (await db.query("SELECT key, value, now() AS read_at FROM app_settings WHERE key IN ('features', 'branding', 'options', 'menu_settings', 'general_settings')")).rows;
     const stored = Object.fromEntries(rows.map((row) => [row.key, row.value]));
     return {
       features: { ...DEFAULT_FEATURES, ...(stored.features ?? {}) },
       branding: { ...DEFAULT_BRANDING, ...(stored.branding ?? {}) },
       options: { ...DEFAULT_OPTIONS, ...(stored.options ?? {}) },
       ...menuSettings(stored.menu_settings),
+      ...generalSettings(stored.general_settings),
     };
   }
   const readConfig = async () => ({
@@ -139,18 +150,32 @@ export function registerFeatures({ app, db, requireAuth, requireSignedIn, requir
       if (!Number.isInteger(req.body.menuHistoryDays) || req.body.menuHistoryDays < 1 || req.body.menuHistoryDays > 90) throw fail(400, 'INVALID_SETTINGS', 'Menu history must be between 1 and 90 days.');
       menuChoices.menuHistoryDays = req.body.menuHistoryDays;
     }
+    const general = { usageRetentionDays: current.usageRetentionDays, homeContactsCount: current.homeContactsCount };
+    for (const [key, [min, max]] of Object.entries(GENERAL_LIMITS)) {
+      if (req.body?.[key] === undefined) continue;
+      if (!Number.isInteger(req.body[key]) || req.body[key] < min || req.body[key] > max) throw fail(400, 'INVALID_SETTINGS', key === 'usageRetentionDays' ? `Keep usage data for between ${min} and ${max} days.` : `Show between ${min} and ${max} contacts on Home.`);
+      general[key] = req.body[key];
+    }
+    // The log names what actually changed (not the whole state), so it stays short and useful.
+    const changes = [];
+    for (const [key, on] of Object.entries(features)) if (on !== current.features[key]) changes.push(`${key} ${on ? 'on' : 'off'}`);
+    for (const [key, on] of Object.entries(options)) if (on !== current.options[key]) changes.push(`${key} ${on ? 'on' : 'off'}`);
+    for (const key of Object.keys(branding)) if (branding[key] !== current.branding[key]) changes.push(`branding ${key}`);
+    for (const key of Object.keys(menuChoices)) if (menuChoices[key] !== current[key]) changes.push(`${key} = ${menuChoices[key]}`);
+    for (const key of Object.keys(general)) if (general[key] !== current[key]) changes.push(`${key} = ${general[key]}`);
     const version = await db.tx(async (tx) => {
+      await tx.query("INSERT INTO app_settings (key, value) VALUES ('general_settings', $1) ON CONFLICT (key) DO UPDATE SET value = excluded.value", [JSON.stringify(general)]);
       await tx.query("INSERT INTO app_settings (key, value) VALUES ('features', $1) ON CONFLICT (key) DO UPDATE SET value = excluded.value", [JSON.stringify(features)]);
       await tx.query("INSERT INTO app_settings (key, value) VALUES ('branding', $1) ON CONFLICT (key) DO UPDATE SET value = excluded.value", [JSON.stringify(branding)]);
       await tx.query("INSERT INTO app_settings (key, value) VALUES ('options', $1) ON CONFLICT (key) DO UPDATE SET value = excluded.value", [JSON.stringify(options)]);
       await tx.query("INSERT INTO app_settings (key, value) VALUES ('menu_settings', $1) ON CONFLICT (key) DO UPDATE SET value = excluded.value", [JSON.stringify(menuChoices)]);
       // The audit call also bumps the config version, which is what tells every open tab to reload its settings.
-      return audit(tx, req.user.id, 'settings.updated', null, Object.entries(features).filter(([, on]) => !on).map(([key]) => key).join(',') || 'all features on');
+      return audit(tx, req.user.id, 'settings.updated', null, changes.join(', ') || 'no changes');
     });
     // A shorter menu history takes effect straight away instead of at the next daily cleanup.
     if (menuChoices.menuHistoryDays !== current.menuHistoryDays) await menu.maybeCleanup(menuChoices);
     res.set('X-Config-Version', String(version));
-    res.json({ features, branding, options, ...menuChoices, configVersion: version });
+    res.json({ features, branding, options, ...menuChoices, ...general, configVersion: version });
   });
 
   // ---------- My profile ----------
@@ -216,8 +241,9 @@ export function registerFeatures({ app, db, requireAuth, requireSignedIn, requir
   });
   app.patch('/api/admin/links/:id', requirePermission('content.links'), requireCsrf, async (req, res) => {
     const [sql, params] = updateRow('links', req.params.id, linkBody(req.body, true));
-    const result = await db.query(`${sql} RETURNING id`, params);
+    const result = await db.query(`${sql} RETURNING title`, params);
     if (!result.rows.length) throw fail(404, 'NOT_FOUND', 'That link no longer exists.');
+    await audit(db, req.user.id, 'link.updated', req.params.id, result.rows[0].title);
     res.status(204).end();
   });
   app.delete('/api/admin/links/:id', requirePermission('content.links'), requireCsrf, async (req, res) => {
@@ -240,10 +266,24 @@ export function registerFeatures({ app, db, requireAuth, requireSignedIn, requir
     if (out.email && !/^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/.test(out.email)) throw fail(400, 'INVALID_EMAIL', 'Enter a valid email address.');
     if (!partial && !out.phone && !out.email) throw fail(400, 'INVALID_INPUT', 'Add a phone number or an email address.');
     if (body?.sortOrder !== undefined) out.sort_order = sortOrder(body.sortOrder);
+    if (body?.pinToHome !== undefined) {
+      if (typeof body.pinToHome !== 'boolean') throw fail(400, 'INVALID_INPUT', 'Show on Home must be on or off.');
+      out.pin_to_home = body.pinToHome;
+    }
     return out;
   };
+  // The few contacts Home shows: the ones an admin pinned, or (when none are pinned) the first emergency contacts.
+  // Bootstrap carries them, so Home never makes a request of its own for this.
+  const homeContacts = async (settings) => {
+    if (!settings.features.contacts || settings.options.homeContacts === false) return [];
+    const size = settings.homeContactsCount;
+    const columns = 'id, name, role_title, phone, email, hours, emoji';
+    const pinned = (await db.query(`SELECT ${columns}, now() AS read_at FROM contacts WHERE pin_to_home = TRUE ORDER BY sort_order, name LIMIT $1`, [size])).rows;
+    if (pinned.length) return pinned.map(({ read_at, ...row }) => row);
+    return (await db.query(`SELECT ${columns}, now() AS read_at FROM contacts WHERE category ILIKE 'emergency' ORDER BY sort_order, name LIMIT $1`, [size])).rows.map(({ read_at, ...row }) => row);
+  };
   app.get('/api/contacts', requireAuth, feature('contacts'), async (_req, res) => {
-    const { rows } = await db.query('SELECT id, name, role_title, category, phone, email, hours, notes, emoji, sort_order FROM contacts ORDER BY category, sort_order, name LIMIT 300');
+    const { rows } = await db.query('SELECT id, name, role_title, category, phone, email, hours, notes, emoji, sort_order, pin_to_home FROM contacts ORDER BY category, sort_order, name LIMIT 300');
     res.json({ contacts: rows });
   });
   app.post('/api/admin/contacts', requirePermission('content.contacts'), requireCsrf, async (req, res) => {
@@ -254,8 +294,9 @@ export function registerFeatures({ app, db, requireAuth, requireSignedIn, requir
   });
   app.patch('/api/admin/contacts/:id', requirePermission('content.contacts'), requireCsrf, async (req, res) => {
     const [sql, params] = updateRow('contacts', req.params.id, contactBody(req.body, true));
-    const result = await db.query(`${sql} RETURNING id`, params);
+    const result = await db.query(`${sql} RETURNING name`, params);
     if (!result.rows.length) throw fail(404, 'NOT_FOUND', 'That contact no longer exists.');
+    await audit(db, req.user.id, 'contact.updated', req.params.id, result.rows[0].name);
     res.status(204).end();
   });
   app.delete('/api/admin/contacts/:id', requirePermission('content.contacts'), requireCsrf, async (req, res) => {
@@ -305,13 +346,15 @@ export function registerFeatures({ app, db, requireAuth, requireSignedIn, requir
   });
   app.patch('/api/admin/announcements/:id', requirePermission('content.announcements'), requireCsrf, async (req, res) => {
     const [sql, params] = updateRow('announcements', req.params.id, announcementBody(req.body, true));
-    const result = await db.query(`${sql} RETURNING id`, params);
+    const result = await db.query(`${sql} RETURNING title`, params);
     if (!result.rows.length) throw fail(404, 'NOT_FOUND', 'That announcement no longer exists.');
+    await audit(db, req.user.id, 'announcement.updated', req.params.id, result.rows[0].title);
     res.status(204).end();
   });
   app.delete('/api/admin/announcements/:id', requirePermission('content.announcements'), requireCsrf, async (req, res) => {
-    const result = await db.query('DELETE FROM announcements WHERE id = $1 RETURNING id', [req.params.id]);
+    const result = await db.query('DELETE FROM announcements WHERE id = $1 RETURNING title', [req.params.id]);
     if (!result.rows.length) throw fail(404, 'NOT_FOUND', 'That announcement no longer exists.');
+    await audit(db, req.user.id, 'announcement.deleted', req.params.id, result.rows[0].title);
     res.status(204).end();
   });
 
@@ -350,6 +393,8 @@ export function registerFeatures({ app, db, requireAuth, requireSignedIn, requir
     if (!kudos) throw fail(404, 'NOT_FOUND', 'That shout-out is gone.');
     if (kudos.from_id !== req.user.id && !req.user.permissions.includes('community.moderation')) throw fail(403, 'NOT_OWNER', 'You can only remove your own shout-outs.');
     await db.query('DELETE FROM kudos WHERE id = $1', [kudos.id]);
+    // Only a moderator removing someone else's shout-out is worth a log line; people deleting their own is routine.
+    if (kudos.from_id !== req.user.id) await audit(db, req.user.id, 'kudos.removed', kudos.id, 'moderated');
     res.status(204).end();
   });
 
@@ -374,7 +419,7 @@ export function registerFeatures({ app, db, requireAuth, requireSignedIn, requir
     if (poll.closed || (poll.closes_at && new Date(poll.closes_at).getTime() <= Date.now())) throw fail(409, 'POLL_CLOSED', 'This poll has closed.');
     const option = req.body?.option;
     if (!Number.isInteger(option) || option < 0 || option >= poll.options.length) throw fail(400, 'INVALID_OPTION', 'Choose one of the options.');
-    await db.query('INSERT INTO poll_votes (poll_id, employee_id, option_index) VALUES ($1,$2,$3) ON CONFLICT (poll_id, employee_id) DO UPDATE SET option_index = excluded.option_index', [poll.id, req.user.id, option]);
+    await db.query('INSERT INTO poll_votes (poll_id, employee_id, option_index) VALUES ($1,$2,$3) ON CONFLICT (poll_id, employee_id) DO UPDATE SET option_index = excluded.option_index, voted_at = now()', [poll.id, req.user.id, option]);
     res.status(204).end();
   });
   app.post('/api/admin/polls', requirePermission('community.polls'), requireCsrf, async (req, res) => {
@@ -396,13 +441,15 @@ export function registerFeatures({ app, db, requireAuth, requireSignedIn, requir
     res.status(201).json({ id });
   });
   app.post('/api/admin/polls/:id/close', requirePermission('community.polls'), requireCsrf, async (req, res) => {
-    const result = await db.query('UPDATE polls SET closed = TRUE WHERE id = $1 RETURNING id', [req.params.id]);
+    const result = await db.query('UPDATE polls SET closed = TRUE WHERE id = $1 RETURNING question', [req.params.id]);
     if (!result.rows.length) throw fail(404, 'NOT_FOUND', 'That poll is gone.');
+    await audit(db, req.user.id, 'poll.closed', req.params.id, result.rows[0].question);
     res.status(204).end();
   });
   app.delete('/api/admin/polls/:id', requirePermission('community.polls'), requireCsrf, async (req, res) => {
-    const result = await db.query('DELETE FROM polls WHERE id = $1 RETURNING id', [req.params.id]);
+    const result = await db.query('DELETE FROM polls WHERE id = $1 RETURNING question', [req.params.id]);
     if (!result.rows.length) throw fail(404, 'NOT_FOUND', 'That poll is gone.');
+    await audit(db, req.user.id, 'poll.deleted', req.params.id, result.rows[0].question);
     res.status(204).end();
   });
 
@@ -454,10 +501,12 @@ export function registerFeatures({ app, db, requireAuth, requireSignedIn, requir
     if (!['new', 'seen', 'done'].includes(req.body?.status)) throw fail(400, 'INVALID_STATUS', 'Choose new, seen or done.');
     const result = await db.query('UPDATE feedback SET status = $2 WHERE id = $1 RETURNING id', [req.params.id, req.body.status]);
     if (!result.rows.length) throw fail(404, 'NOT_FOUND', 'That note is gone.');
+    await audit(db, req.user.id, 'feedback.updated', req.params.id, req.body.status);
     res.status(204).end();
   });
   app.delete('/api/admin/feedback/:id', requirePermission('community.ideas'), requireCsrf, async (req, res) => {
-    await db.query('DELETE FROM feedback WHERE id = $1', [req.params.id]);
+    const result = await db.query('DELETE FROM feedback WHERE id = $1 RETURNING id', [req.params.id]);
+    if (result.rows.length) await audit(db, req.user.id, 'feedback.deleted', req.params.id);
     res.status(204).end();
   });
 
@@ -496,71 +545,6 @@ export function registerFeatures({ app, db, requireAuth, requireSignedIn, requir
       { id: 'voice', emoji: '🗳️', name: 'Your voice', hint: 'Vote in 3 polls', earned: row.votes >= 3 },
     ];
     res.json({ points, level: { ...LEVELS[level], index: level }, next: next ? { name: next.name, emoji: next.emoji, remaining: next.min - points, progress: (points - LEVELS[level].min) / (next.min - LEVELS[level].min) } : null, badges, stats: row });
-  });
-
-  // ---------- Insights dashboard ----------
-  app.get('/api/admin/insights', requirePermission('insights.view'), async (_req, res) => {
-    const todayKey = dateKey(new Date());
-    const dayStart = new Date(`${todayKey}T00:00:00+05:30`);
-    const dayEnd = new Date(dayStart.getTime() + DAY_MS);
-    const from = new Date(dayStart.getTime() - 13 * DAY_MS);
-    const until = new Date(dayStart.getTime() + 7 * DAY_MS);
-    const since30 = new Date(Date.now() - 30 * DAY_MS);
-    const since60 = new Date(Date.now() - 60 * DAY_MS);
-
-    const totals = (await db.query(`
-      SELECT (SELECT COUNT(*)::int FROM employees WHERE active = TRUE) AS people,
-             (SELECT COUNT(*)::int FROM resources WHERE type = 'desk' AND active = TRUE) AS desks,
-             (SELECT COUNT(*)::int FROM resources WHERE type = 'room' AND active = TRUE) AS rooms,
-             (SELECT COUNT(DISTINCT b.resource_id)::int FROM bookings b JOIN resources r ON r.id = b.resource_id WHERE r.type = 'desk' AND r.active = TRUE AND b.status = 'confirmed' AND b.starts_at < $2 AND b.ends_at > $1) AS desks_today,
-             (SELECT COUNT(DISTINCT b.resource_id)::int FROM bookings b JOIN resources r ON r.id = b.resource_id WHERE r.type = 'room' AND r.active = TRUE AND b.status = 'confirmed' AND b.starts_at < $2 AND b.ends_at > $1) AS rooms_today,
-             (SELECT COUNT(DISTINCT employee_id)::int FROM bookings WHERE status = 'confirmed' AND starts_at >= $3 AND starts_at < now()) AS active_bookers,
-             (SELECT COUNT(*)::int FROM bookings WHERE status = 'confirmed' AND starts_at >= $3 AND starts_at < now()) AS bookings_30d,
-             (SELECT COUNT(*)::int FROM bookings WHERE status = 'cancelled' AND created_at >= $3) AS cancelled_30d,
-             (SELECT COUNT(DISTINCT b.resource_id)::int FROM bookings b JOIN resources r ON r.id = b.resource_id WHERE r.type = 'desk' AND r.active = TRUE AND b.status = 'confirmed' AND b.starts_at >= $3 AND b.starts_at < now()) AS desks_used_30d,
-             (SELECT COUNT(*)::int FROM kudos WHERE created_at >= $3) AS kudos_30d,
-             (SELECT COUNT(*)::int FROM poll_votes pv JOIN polls p ON p.id = pv.poll_id WHERE p.created_at >= $3) AS votes_30d,
-             (SELECT COUNT(*)::int FROM feedback WHERE status = 'new') AS feedback_new,
-             (SELECT COUNT(*)::int FROM events WHERE ends_at >= now()) AS events_upcoming,
-             (SELECT COUNT(*)::int FROM event_rsvps r JOIN events e ON e.id = r.event_id WHERE e.ends_at >= now()) AS rsvps_upcoming`, [dayStart, dayEnd, since30])).rows[0];
-
-    const perDay = (await db.query(`
-      SELECT to_char(b.starts_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS day, r.type, COUNT(*)::int AS n
-      FROM bookings b JOIN resources r ON r.id = b.resource_id WHERE b.status = 'confirmed' AND b.starts_at >= $1 AND b.starts_at < $2 GROUP BY day, r.type`, [from, until])).rows;
-    const trend = [];
-    for (let i = -13; i <= 7; i += 1) {
-      const day = addDays(todayKey, i);
-      trend.push({ date: day, desks: perDay.find((r) => r.day === day && r.type === 'desk')?.n ?? 0, rooms: perDay.find((r) => r.day === day && r.type === 'room')?.n ?? 0, future: i > 0 });
-    }
-
-    const byTeam = (await db.query(`
-      SELECT COALESCE(t.name, 'Unassigned') AS name, COALESCE(t.color, '#8f9a94') AS color,
-             COUNT(DISTINCT r.id)::int AS seats, COUNT(b.id)::int AS bookings
-      FROM resources r LEFT JOIN teams t ON t.id = r.team_id
-      LEFT JOIN bookings b ON b.resource_id = r.id AND b.status = 'confirmed' AND b.starts_at >= $1 AND b.starts_at < now()
-      WHERE r.type = 'desk' AND r.active = TRUE GROUP BY t.name, t.color ORDER BY bookings DESC, name LIMIT 20`, [since30])).rows;
-
-    const topSpaces = (await db.query(`
-      SELECT r.label, r.type, COUNT(*)::int AS n FROM bookings b JOIN resources r ON r.id = b.resource_id
-      WHERE b.status = 'confirmed' AND b.starts_at >= $1 AND b.starts_at < now() GROUP BY r.label, r.type ORDER BY n DESC, r.label LIMIT 8`, [since30])).rows;
-
-    const dow = (await db.query(`
-      SELECT EXTRACT(DOW FROM starts_at AT TIME ZONE 'Asia/Kolkata')::int AS dow, COUNT(*)::int AS n FROM bookings
-      WHERE status = 'confirmed' AND starts_at >= $1 AND starts_at < now() GROUP BY dow`, [since60])).rows;
-    const weekdays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((name, index) => ({ name, n: dow.find((r) => r.dow === index)?.n ?? 0 }));
-
-    res.json({
-      generatedAt: new Date().toISOString(), today: todayKey,
-      totals: {
-        people: totals.people, desks: totals.desks, rooms: totals.rooms, desksToday: totals.desks_today, roomsToday: totals.rooms_today,
-        deskUtilisationToday: totals.desks ? Math.round((totals.desks_today / totals.desks) * 100) : 0,
-        deskCoverage30d: totals.desks ? Math.round((totals.desks_used_30d / totals.desks) * 100) : 0,
-        activeBookers30d: totals.active_bookers, bookings30d: totals.bookings_30d, cancelled30d: totals.cancelled_30d,
-        kudos30d: totals.kudos_30d, votes30d: totals.votes_30d, feedbackNew: totals.feedback_new,
-        eventsUpcoming: totals.events_upcoming, rsvpsUpcoming: totals.rsvps_upcoming,
-      },
-      trend, byTeam, topSpaces, weekdays,
-    });
   });
 
   // ---------- Roles (templates of permissions) ----------
@@ -643,5 +627,5 @@ export function registerFeatures({ app, db, requireAuth, requireSignedIn, requir
     res.status(204).end();
   });
 
-  return { readSettings, readConfig, menu, notifier };
+  return { readSettings, readConfig, menu, notifier, homeContacts };
 }

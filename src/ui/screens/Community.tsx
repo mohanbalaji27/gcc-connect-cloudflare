@@ -2,6 +2,7 @@
 import { KUDOS_BADGES, type Celebration, type Kudos, type Person, type Poll } from '../../lib/types';
 import { api, messageOf } from '../../lib/api';
 import { inIndia } from '../../lib/format';
+import { track } from '../../lib/usage';
 import type { Ctx } from '../App';
 import { Avatar, Empty, Field, Icon, Modal, Spinner, Tabs, useKit } from '../kit';
 
@@ -15,6 +16,7 @@ export function CommunityScreen({ ctx }: { ctx: Ctx }) {
     ...(ctx.flag('feedback') ? [{ id: 'feedback' as Tab, label: 'Idea box', icon: 'chat' }] : []),
   ];
   const [tab, setTab] = useState<Tab>(tabs[0].id);
+  useEffect(() => { track(tab === 'feedback' ? 'ideas' : tab); }, [tab]);
   return (
     <div>
       <div className="page-head"><div><span className="eyebrow">COMMUNITY</span><h1>The good stuff</h1></div></div>

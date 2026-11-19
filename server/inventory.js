@@ -82,7 +82,7 @@ export async function importInventory(tx, inventory, { replace = false } = {}) {
     const keep = seats.map((seat) => seat.label.toLowerCase());
     const stale = (await tx.query("SELECT id FROM resources WHERE type = 'desk' AND active = TRUE AND NOT (lower(label) = ANY($1::text[]))", [keep])).rows.map((row) => row.id);
     if (stale.length) {
-      await tx.query("UPDATE bookings SET status = 'cancelled' WHERE resource_id = ANY($1::text[]) AND status = 'confirmed' AND ends_at > now()", [stale]);
+      await tx.query("UPDATE bookings SET status = 'cancelled', cancelled_at = now() WHERE resource_id = ANY($1::text[]) AND status = 'confirmed' AND ends_at > now()", [stale]);
       await tx.query('UPDATE resources SET active = FALSE WHERE id = ANY($1::text[])', [stale]);
       retired = stale.length;
     }

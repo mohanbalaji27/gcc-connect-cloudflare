@@ -14,8 +14,11 @@ paths:
   /session: { get: { summary: Current user and CSRF token (user is null when signed out) } }
   /me/password: { post: { summary: Change own password (allowed while a temporary password is active) } }
   /me/summary: { get: { summary: "Streak, monthly visits and desks left today" } }
-  /bootstrap: { get: { summary: "Everything the app needs after sign-in in one call: configVersion, user, config (features, branding, options, permissionCatalog, notificationCatalog), teams, map info (incl. floorPlanVersion), the summary and the unread notification count. Sends an ETag, so repeat calls are cheap 304s" } }
-  /pulse: { get: { summary: "Tiny heartbeat: { configVersion, serverTime, notifications: { unread } }. configVersion goes up whenever settings, branding, teams, spaces or the map change; clients reload /bootstrap when it differs. Every API response also carries it in the X-Config-Version header. Features add fields here through app.locals.pulse.add(name, fn); the bell count rides on it, so it costs no extra call" } }
+  /bootstrap: { get: { summary: "Everything the app needs after sign-in in one call: configVersion, user, config (features, branding, options, usageRetentionDays, homeContactsCount, permissionCatalog, notificationCatalog), teams, map info (incl. floorPlanVersion), the summary, the unread notification count and homeContacts (the few contacts the Home card shows: pinned ones, else the first emergency contacts; empty when the contacts feature or the homeContacts option is off). Sends an ETag, so repeat calls are cheap 304s" } }
+  /pulse:
+    get: { summary: "Tiny heartbeat: { configVersion, serverTime, notifications: { unread } }. configVersion goes up whenever settings, branding, teams, spaces, contacts or the map change; clients reload /bootstrap when it differs. Every API response also carries it in the X-Config-Version header. Features add fields here through app.locals.pulse.add(name, fn); the bell count rides on it, so it costs no extra call" }
+    post: { summary: "The same heartbeat, carrying the browser's batched screen-open counts: body { usage: { <feature>: <count> } } (CSRF header required). The reply is the heartbeat plus usage: { accepted } (or { accepted: 0, enabled: false } when a super admin switched usage analytics off, or { accepted: 0, throttled: true }). Unknown features and unreadable counts are ignored; more than 40 keys or a non-object is 400" }
+  /usage: { post: { summary: "Screen-open counts for navigator.sendBeacon when the page is hidden: { csrf, events: { <feature>: <count> } } (the CSRF token may travel in the body because beacons cannot set headers). Whitelisted features only, counts 1-500 per feature, max 40 keys, 20 requests a minute per person; stores one row per person, feature and office day (usage_daily) and one hourly total with nobody attached (usage_hourly). Nothing is stored when the usageAnalytics option is off" } }
   /availability: { get: { summary: "Busy intervals for one office day (?date=YYYY-MM-DD, Asia/Kolkata): { date, showNames, busy: { spaceId: [[fromMinute, toMinute, mine(0|1), name?]] } }. Names only when the showBookerNames option is on or the caller has bookings.view_all. ETag, private" } }
   /health: { get: { summary: "Liveness and database check, security: []" } }
   /resources:
@@ -68,15 +71,17 @@ paths:
     post: { summary: Create a person; returns a one-time temporary password (users.manage) }
   /admin/users/{id}: { patch: { summary: "Change name, team, username, active (users.edit) and role, role template, permissions (users.change_roles). Non-super-admins can only grant permissions they hold, never the super-admin-only ones" } }
   /admin/users/{id}/reset-password: { post: { summary: Issue a temporary password and end sessions (users.reset_password) } }
-  /admin/audit: { get: { summary: Recent activity (users.audit) } }
+  /admin/audit: { get: { summary: "Activity feed, newest first (users.audit): ?user=<person id>&area=<bookings|events|spaces|map|teams|users|roles|settings|menu|content|issues|community|security|signin>&q=<text>&from=&to=<ISO instants, from inclusive, to exclusive>&limit=<1-100, default 25>&before=<cursor from the previous page>. Returns { entries: [{ id, at, action, area, areaLabel, title, text, actorId, actorName, detail, entityId }], hasMore, next } and, on the first page only, total and areas. Sign-ins come from login_events (area signin), everything else from the activity log. text is a ready-made sentence naming who did what to whom. Bad filters are 400 INVALID_FILTER" } }
+  /admin/audit/people: { get: { summary: "?q=<2+ characters>: up to 8 people (including suspended ones) by name, email or username for the activity person filter (users.audit)" } }
+  /admin/audit/export: { get: { summary: "CSV of the activity feed with the same filters (user, area, q, from, to), capped at 5,000 rows; cells that start with = + - @ are defused for spreadsheets (users.audit)" } }
   /public-config: { get: { summary: "App name, tagline, welcome note and default theme (no sign-in needed), security: []" } }
   /config: { get: { summary: "Branding, feature switches and the feature catalogue" } }
-  /admin/settings: { put: { summary: "Turn features on or off (issues, kudos, ...), edit branding and options { showBookerNames, eventsRsvpEnabled, issuePhotosEnabled }, and the food menu settings menuReviewsVisibility (everyone | summary | managers) and menuHistoryDays (1-90) (super admin). Bumps the config version" } }
+  /admin/settings: { put: { summary: "Turn features on or off (issues, kudos, ...), edit branding and options { showBookerNames, eventsRsvpEnabled, issuePhotosEnabled, homeContacts, usageAnalytics }, the food menu settings menuReviewsVisibility (everyone | summary | managers) and menuHistoryDays (1-90), usageRetentionDays (30-1095, default 400) and homeContactsCount (1-6, default 4) (super admin). Bumps the config version; the activity log names what changed" } }
   /me/profile: { patch: { summary: "Avatar, birthday, and who's-in visibility" } }
   /me/vibes: { get: { summary: "Points, level and badges" } }
   /people: { get: { summary: Name directory for pickers } }
   /links: { get: { summary: "Useful links (?manage=1 lets managers read while switched off)" } }
-  /contacts: { get: { summary: Important contacts } }
+  /contacts: { get: { summary: "Important contacts (with pin_to_home)" } }
   /menu: { get: { summary: "The food menu window in one call: { from, to, today, historyDays, visibility, canSeeReviews, items, ratings, dishRatings, mine }. Default window = the kept history + today + 7 days (or ?from=&days=, up to 45). Items carry course, special, likes; ratings follow the menuReviewsVisibility setting. ETag, private" } }
   /menu/{id}/like: { post: { summary: Toggle a like } }
   /menu/review:
@@ -94,8 +99,8 @@ paths:
   /whosin: { get: { summary: People with a desk today who have not opted out } }
   /admin/links: { post: { summary: Add a link (content.links) } }
   /admin/links/{id}: { patch: { summary: Edit a link }, delete: { summary: Delete a link } }
-  /admin/contacts: { post: { summary: Add a contact (content.contacts) } }
-  /admin/contacts/{id}: { patch: { summary: Edit a contact }, delete: { summary: Delete a contact } }
+  /admin/contacts: { post: { summary: "Add a contact (content.contacts). { pinToHome: true } shows it on the Home card" } }
+  /admin/contacts/{id}: { patch: { summary: "Edit a contact, including pinToHome (logged; bumps the config version so open apps refresh their Home contacts)" }, delete: { summary: Delete a contact } }
   /admin/announcements: { post: { summary: "Publish an announcement (content.announcements). { notify: true } also notifies everyone who has not switched announcements off" } }
   /admin/announcements/{id}: { patch: { summary: Edit }, delete: { summary: Delete } }
   /admin/menu: { post: { summary: Add one dish to one or more dates (menu.edit; the day editor is the usual way) } }
@@ -113,7 +118,8 @@ paths:
   /admin/polls/{id}: { delete: { summary: Delete a poll } }
   /admin/feedback: { get: { summary: Read the idea box (community.ideas) } }
   /admin/feedback/{id}: { patch: { summary: "Mark new, seen or done" }, delete: { summary: Delete a note } }
-  /admin/insights: { get: { summary: Dashboard numbers (insights.view) } }
+  /admin/insights: { get: { summary: "Dashboard numbers (insights.view). Windows are office days in India time; 'last 30 days' = the 30 days ending today. Returns { today, officeHours, totals, trend (14 past days + 7 upcoming), byTeam, topSpaces, weekdays }. totals: desk and room use today as seat-time inside office hours (9-18), seats booked today, people who booked (active accounts), bookings (desk, room, total) by start day, cancellations by cancel time, desk coverage over active desks, and kudos, poll votes, new ideas and RSVPs (null when that feature is off). ETag changes whenever a number changes; Cache-Control private, no-cache" } }
+  /admin/usage: { get: { summary: "Usage analytics (insights.view): ?days=<1-400, default 30> or ?from=&to=<YYYY-MM-DD, to <= today, at most 400 days>. Returns { from, to, days, previous, collecting, retentionDays, since, series: [{ date, logins, loginPeople, active }], totals, reach: { dau, wau, mau, stickiness }, cohort: { current, previous, retained, retention, newPeople, returningPeople }, features: [{ id, label, opens, users, prevOpens, prevUsers }], unused, hours, teams (teams under 3 people are merged) }. Totals only: never who opened what. ETag; private, max-age=60" } }
   /admin/roles: { get: { summary: "Role templates with permissions, simpleUi, landing, notifyDefaults and head count (super admin)" }, post: { summary: "Create a role { name, emoji, description, permissions, simpleUi, landing, notifyDefaults }. Older permission strings are expanded; settings.manage and roles.manage are refused" } }
   /admin/roles/{id}: { patch: { summary: Edit a role template }, delete: { summary: "Delete a role template. 409 ROLE_SYSTEM for built-in roles and ROLE_IN_USE while people hold it" } }
   /issues/categories: { get: { summary: "Active issue categories for the tiles, plus photosEnabled and reopenDays. Needs the issues feature" } }

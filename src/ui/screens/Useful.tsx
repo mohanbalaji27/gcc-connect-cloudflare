@@ -1,6 +1,7 @@
 ﻿import { useEffect, useMemo, useState } from 'react';
 import type { ContactItem, LinkItem } from '../../lib/types';
 import { api, messageOf } from '../../lib/api';
+import { track } from '../../lib/usage';
 import type { Ctx } from '../App';
 import { Empty, ExternalLink, Icon, Spinner, Tabs, useKit } from '../kit';
 
@@ -17,6 +18,7 @@ export function UsefulScreen({ ctx }: { ctx: Ctx }) {
   const [links, setLinks] = useState<LinkItem[] | null>(null);
   const [contacts, setContacts] = useState<ContactItem[] | null>(null);
   const [search, setSearch] = useState('');
+  useEffect(() => { if (tabs.some((item) => item.id === tab)) track(tab); }, [tab]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (ctx.flag('links')) api<{ links: LinkItem[] }>('/links').then((r) => setLinks(r.links)).catch((e) => { toast(messageOf(e), 'error'); setLinks([]); });
