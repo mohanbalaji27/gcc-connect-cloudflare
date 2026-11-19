@@ -9,6 +9,7 @@ export const PERMISSIONS = {
   'users.manage': 'Create users, change roles and permissions, reset passwords',
   'content.manage': 'Manage links, contacts and announcements',
   'menu.manage': 'Manage the food menu',
+  'menu.reviews.view': 'Read food menu reviews and comments (menu.manage includes this)',
   'community.manage': 'Run polls, moderate kudos, read the feedback box',
   'insights.view': 'See the insights dashboard',
 };

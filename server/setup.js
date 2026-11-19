@@ -144,14 +144,15 @@ async function seedContent(db, options) {
     await q('INSERT INTO contacts (id, name, role_title, category, phone, email, hours, notes, emoji, sort_order) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)', [`contact-demo-${index}`, name, roleTitle, category, phone, email, hours, notes, emoji, index]);
   }
   const menu = [
-    ['breakfast', 'Masala dosa', 'With sambar and two chutneys', 'veg', '🥞'], ['breakfast', 'Egg bhurji toast', '', 'egg', '🍳'],
-    ['lunch', 'Paneer butter masala', 'Jeera rice, roti, salad', 'veg', '🍛'], ['lunch', 'Chicken biryani', 'With raita', 'non-veg', '🍗'], ['lunch', 'Dal tadka', 'Comfort in a bowl', 'vegan', '🥘'],
-    ['snacks', 'Samosa and chai', '', 'veg', '🫖'], ['dinner', 'Veg pulao', '', 'veg', '🍚'],
+    ['breakfast', 'mains', 'Masala dosa', 'With sambar and two chutneys', 'veg', '🥞'], ['breakfast', 'mains', 'Egg bhurji toast', '', 'egg', '🍳'], ['breakfast', 'drinks', 'Filter coffee', '', 'veg', '☕'],
+    ['lunch', 'starters', 'Paneer tikka', 'Charcoal grilled', 'veg', '🍢'], ['lunch', 'mains', 'Paneer butter masala', 'Jeera rice, roti, salad', 'veg', '🍛'], ['lunch', 'mains', 'Chicken biryani', 'With raita', 'non-veg', '🍗'],
+    ['lunch', 'mains', 'Dal tadka', 'Comfort in a bowl', 'vegan', '🥘'], ['lunch', 'breads-rice', 'Jeera rice', '', 'veg', '🍚'], ['lunch', 'desserts', 'Gulab jamun', 'Served warm', 'veg', '🍮'],
+    ['snacks', 'starters', 'Samosa', '', 'veg', '🥟'], ['snacks', 'drinks', 'Masala chai', '', 'veg', '🫖'], ['dinner', 'mains', 'Veg pulao', '', 'veg', '🍚'], ['dinner', 'desserts', 'Payasam', '', 'veg', '🍨'],
   ];
   for (let day = 0; day < 5; day += 1) {
     const date = officeDay(day);
-    for (const [index, [meal, name, description, diet, emoji]] of menu.entries()) {
-      await q('INSERT INTO menu_items (id, menu_date, meal, name, description, diet, emoji) VALUES ($1,$2,$3,$4,$5,$6,$7)', [`dish-demo-${day}-${index}`, date, meal, name, description, diet, emoji]);
+    for (const [index, [meal, course, name, description, diet, emoji]] of menu.entries()) {
+      await q('INSERT INTO menu_items (id, menu_date, meal, course, name, description, diet, emoji, sort_order, special) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)', [`dish-demo-${day}-${index}`, date, meal, course, name, description, diet, emoji, index, name === 'Paneer tikka']);
     }
   }
   await q("INSERT INTO announcements (id, title, body, emoji, pinned) VALUES ('news-demo-1', 'Welcome to the new office app', 'Book desks, grab lunch, say thanks. Tell us what else you want to see in the idea box.', '🎉', TRUE)");

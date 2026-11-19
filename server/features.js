@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { ALL_PERMISSIONS, PERMISSIONS, safeUrl } from './security.js';
+import { DEFAULT_MENU_SETTINGS, REVIEW_VISIBILITY } from './menu-catalog.js';
+import { registerMenu } from './menu.js';
 
 export const FEATURE_KEYS = {
   links: 'Useful links (user guides, portals)',
@@ -23,8 +25,6 @@ export const DEFAULT_OPTIONS = { showBookerNames: false, eventsRsvpEnabled: true
 export const ACCENTS = ['green', 'ocean', 'sunset', 'berry', 'mono'];
 export const DEFAULT_BRANDING = { appName: 'GCC Connect', tagline: 'Your office day, sorted.', accent: 'green', welcome: '' };
 export const KUDOS_BADGES = ['star', 'team', 'idea', 'fire', 'helper', 'coffee'];
-const MEALS = ['breakfast', 'lunch', 'snacks', 'dinner'];
-const DIETS = ['veg', 'non-veg', 'vegan', 'egg'];
 const TZ = 'Asia/Kolkata';
 const DAY_MS = 86_400_000;
 
@@ -44,19 +44,29 @@ export const LEVELS = [
   { name: 'Legend', min: 700, emoji: '👑' },
 ];
 
-export function registerFeatures({ app, db, requireAuth, requireSignedIn, requireCsrf, requirePermission, audit, fail, text, limit, userView }) {
+export function registerFeatures({ app, db, requireAuth, requireSignedIn, requireCsrf, requirePermission, requireAnyPermissions, audit, fail, text, limit, userView }) {
   const requireSuper = (req, _res, next) => {
     if (!req.user) return next(fail(401, 'AUTH_REQUIRED', 'Sign in to continue.'));
     return req.user.role === 'super_admin' ? next() : next(fail(403, 'SUPER_ADMIN_REQUIRED', 'Only a super admin can do that.'));
   };
 
+  // Food menu settings: who can read reviews (everyone | summary | managers) and how many past days of menus and reviews are kept.
+  const menuSettings = (stored) => {
+    const merged = { ...DEFAULT_MENU_SETTINGS, ...(stored ?? {}) };
+    return {
+      menuReviewsVisibility: REVIEW_VISIBILITY.includes(merged.menuReviewsVisibility) ? merged.menuReviewsVisibility : DEFAULT_MENU_SETTINGS.menuReviewsVisibility,
+      menuHistoryDays: Number.isInteger(merged.menuHistoryDays) && merged.menuHistoryDays >= 1 && merged.menuHistoryDays <= 90 ? merged.menuHistoryDays : DEFAULT_MENU_SETTINGS.menuHistoryDays,
+    };
+  };
+
   async function readSettings() {
-    const rows = (await db.query("SELECT key, value, now() AS read_at FROM app_settings WHERE key IN ('features', 'branding', 'options')")).rows;
+    const rows = (await db.query("SELECT key, value, now() AS read_at FROM app_settings WHERE key IN ('features', 'branding', 'options', 'menu_settings')")).rows;
     const stored = Object.fromEntries(rows.map((row) => [row.key, row.value]));
     return {
       features: { ...DEFAULT_FEATURES, ...(stored.features ?? {}) },
       branding: { ...DEFAULT_BRANDING, ...(stored.branding ?? {}) },
       options: { ...DEFAULT_OPTIONS, ...(stored.options ?? {}) },
+      ...menuSettings(stored.menu_settings),
     };
   }
   const readConfig = async () => ({ ...(await readSettings()), featureCatalog: FEATURE_KEYS, optionCatalog: OPTION_KEYS, accents: ACCENTS });
@@ -65,8 +75,9 @@ export function registerFeatures({ app, db, requireAuth, requireSignedIn, requir
   const feature = (name) => async (req, _res, next) => {
     try {
       if (req.method === 'GET' && req.query.manage === '1' && MANAGE_BYPASS[name] && req.user?.permissions.includes(MANAGE_BYPASS[name])) return next();
-      const { features } = await readSettings();
-      return features[name] ? next() : next(fail(404, 'FEATURE_OFF', 'This feature is turned off.'));
+      const settings = await readSettings();
+      req.appSettings = settings;
+      return settings.features[name] ? next() : next(fail(404, 'FEATURE_OFF', 'This feature is turned off.'));
     } catch (error) { return next(error); }
   };
   const id8 = (prefix) => `${prefix}-${randomUUID().slice(0, 8)}`;
@@ -111,15 +122,27 @@ export function registerFeatures({ app, db, requireAuth, requireSignedIn, requir
         branding.accent = input.accent;
       }
     }
+    const menuChoices = { menuReviewsVisibility: current.menuReviewsVisibility, menuHistoryDays: current.menuHistoryDays };
+    if (req.body?.menuReviewsVisibility !== undefined) {
+      if (!REVIEW_VISIBILITY.includes(req.body.menuReviewsVisibility)) throw fail(400, 'INVALID_SETTINGS', 'Choose who sees menu reviews: everyone, summary or managers.');
+      menuChoices.menuReviewsVisibility = req.body.menuReviewsVisibility;
+    }
+    if (req.body?.menuHistoryDays !== undefined) {
+      if (!Number.isInteger(req.body.menuHistoryDays) || req.body.menuHistoryDays < 1 || req.body.menuHistoryDays > 90) throw fail(400, 'INVALID_SETTINGS', 'Menu history must be between 1 and 90 days.');
+      menuChoices.menuHistoryDays = req.body.menuHistoryDays;
+    }
     const version = await db.tx(async (tx) => {
       await tx.query("INSERT INTO app_settings (key, value) VALUES ('features', $1) ON CONFLICT (key) DO UPDATE SET value = excluded.value", [JSON.stringify(features)]);
       await tx.query("INSERT INTO app_settings (key, value) VALUES ('branding', $1) ON CONFLICT (key) DO UPDATE SET value = excluded.value", [JSON.stringify(branding)]);
       await tx.query("INSERT INTO app_settings (key, value) VALUES ('options', $1) ON CONFLICT (key) DO UPDATE SET value = excluded.value", [JSON.stringify(options)]);
+      await tx.query("INSERT INTO app_settings (key, value) VALUES ('menu_settings', $1) ON CONFLICT (key) DO UPDATE SET value = excluded.value", [JSON.stringify(menuChoices)]);
       // The audit call also bumps the config version, which is what tells every open tab to reload its settings.
       return audit(tx, req.user.id, 'settings.updated', null, Object.entries(features).filter(([, on]) => !on).map(([key]) => key).join(',') || 'all features on');
     });
+    // A shorter menu history takes effect straight away instead of at the next daily cleanup.
+    if (menuChoices.menuHistoryDays !== current.menuHistoryDays) await menu.maybeCleanup(menuChoices);
     res.set('X-Config-Version', String(version));
-    res.json({ features, branding, options, configVersion: version });
+    res.json({ features, branding, options, ...menuChoices, configVersion: version });
   });
 
   // ---------- My profile ----------
@@ -234,49 +257,8 @@ export function registerFeatures({ app, db, requireAuth, requireSignedIn, requir
     res.status(204).end();
   });
 
-  // ---------- Food menu ----------
-  app.get('/api/menu', requireAuth, feature('menu'), async (req, res) => {
-    const from = validDate(req.query.from) ? req.query.from : dateKey(new Date());
-    const days = Math.min(31, Math.max(1, Number(req.query.days) || 7));
-    const to = addDays(from, days - 1);
-    const { rows } = await db.query(`
-      SELECT m.id, to_char(m.menu_date, 'YYYY-MM-DD') AS date, m.meal, m.name, m.description, m.diet, m.emoji,
-             (SELECT COUNT(*)::int FROM menu_reactions r WHERE r.item_id = m.id) AS likes,
-             EXISTS (SELECT 1 FROM menu_reactions r WHERE r.item_id = m.id AND r.employee_id = $3) AS liked
-      FROM menu_items m WHERE m.menu_date BETWEEN $1::date AND $2::date
-      ORDER BY m.menu_date, CASE m.meal WHEN 'breakfast' THEN 1 WHEN 'lunch' THEN 2 WHEN 'snacks' THEN 3 ELSE 4 END, m.name LIMIT 600`, [from, to, req.user.id]);
-    res.json({ from, to, items: rows.map((row) => ({ ...row, liked: Boolean(row.liked) })) });
-  });
-  app.post('/api/menu/:id/like', requireAuth, feature('menu'), requireCsrf, async (req, res) => {
-    const item = (await db.query('SELECT id FROM menu_items WHERE id = $1', [req.params.id])).rows[0];
-    if (!item) throw fail(404, 'NOT_FOUND', 'That dish is no longer on the menu.');
-    const removed = await db.query('DELETE FROM menu_reactions WHERE item_id = $1 AND employee_id = $2 RETURNING item_id', [item.id, req.user.id]);
-    if (!removed.rows.length) await db.query('INSERT INTO menu_reactions (item_id, employee_id) VALUES ($1,$2)', [item.id, req.user.id]);
-    res.json({ liked: !removed.rows.length });
-  });
-  app.post('/api/admin/menu', requirePermission('menu.manage'), requireCsrf, async (req, res) => {
-    const body = req.body ?? {};
-    const dates = Array.isArray(body.dates) ? body.dates : [body.date];
-    if (!dates.length || dates.length > 31 || dates.some((d) => !validDate(d))) throw fail(400, 'INVALID_DATE', 'Choose between 1 and 31 valid dates.');
-    if (!MEALS.includes(body.meal)) throw fail(400, 'INVALID_MEAL', 'Choose breakfast, lunch, snacks or dinner.');
-    const diet = body.diet ?? 'veg';
-    if (!DIETS.includes(diet)) throw fail(400, 'INVALID_DIET', 'Choose veg, non-veg, vegan or egg.');
-    const name = text(body.name, 80, { required: true, label: 'Dish name' });
-    const description = text(body.description, 200, { label: 'Description' }) ?? '';
-    const emoji = text(body.emoji, 8, { label: 'Emoji' }) || '🍽️';
-    await db.tx(async (tx) => {
-      for (const date of [...new Set(dates)]) {
-        await tx.query('INSERT INTO menu_items (id, menu_date, meal, name, description, diet, emoji) VALUES ($1,$2,$3,$4,$5,$6,$7)', [id8('dish'), date, body.meal, name, description, diet, emoji]);
-      }
-      await audit(tx, req.user.id, 'menu.added', null, `${name} x${dates.length}`);
-    });
-    res.status(201).json({ added: new Set(dates).size });
-  });
-  app.delete('/api/admin/menu/:id', requirePermission('menu.manage'), requireCsrf, async (req, res) => {
-    const result = await db.query('DELETE FROM menu_items WHERE id = $1 RETURNING name', [req.params.id]);
-    if (!result.rows.length) throw fail(404, 'NOT_FOUND', 'That dish is already gone.');
-    res.status(204).end();
-  });
+  // ---------- Food menu (see menu.js) ----------
+  const menu = registerMenu({ app, db, requireAuth, requireCsrf, requirePermission, requireAnyPermissions, audit, fail, text, limit, feature, readSettings, id8, validDate, dateKey, addDays });
 
   // ---------- Announcements ----------
   const announcementBody = (body, partial) => {
@@ -610,5 +592,5 @@ export function registerFeatures({ app, db, requireAuth, requireSignedIn, requir
     res.status(204).end();
   });
 
-  return { readSettings, readConfig };
+  return { readSettings, readConfig, menu };
 }

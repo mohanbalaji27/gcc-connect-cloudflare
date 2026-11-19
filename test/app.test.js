@@ -755,3 +755,255 @@ test('seat label placement can be set per seat or in a batch, and only from the 
   assert.equal(after.find((r) => r.id === desks[0].id).labelSide, null);
   assert.equal(after.find((r) => r.id === desks[1].id).labelSide, 'top');
 });
+
+// ---------- Food menu v2: day editor, copies, templates, reviews, retention ----------
+const dish = (meal, name, extra = {}) => ({ meal, name, ...extra });
+const menuDay = async (session, day) => (await (await call(session, 'GET', `/admin/menu/day/${day}`)).json()).items;
+const seedDish = (id, day, meal, name) => db.query("INSERT INTO menu_items (id, menu_date, meal, course, name) VALUES ($1,$2,$3,'mains',$4) ON CONFLICT (id) DO NOTHING", [id, day, meal, name]);
+const makeUser = async (id, email, name, permissions = []) => {
+  const { hashPassword } = await import('../server/security.js');
+  await db.query("INSERT INTO employees (id, email, name, team, role, permissions, password_hash) VALUES ($1,$2,$3,'Food','user',$4,$5) ON CONFLICT (id) DO NOTHING", [id, email, name, permissions, hashPassword('gccdemo')]);
+  return signIn(email);
+};
+
+test('menu day editor: one save replaces the whole day, keeps the ids of dishes that stay, and is for menu managers only', async () => {
+  const [noah, ava] = await Promise.all([signIn('noah@demo.gcc'), signIn()]);
+  const day = officeDay(40);
+  const items = [dish('lunch', 'Dal tadka', { diet: 'vegan' }), dish('lunch', 'Paneer tikka', { course: 'starters', special: true, description: 'Charcoal grilled' }), dish('breakfast', 'Idli'), dish('lunch', 'dal  TADKA')];
+  assert.equal((await call(ava, 'PUT', `/admin/menu/day/${day}`, { items })).status, 403);
+  assert.equal((await call(ava, 'GET', `/admin/menu/day/${day}`)).status, 403);
+  assert.equal((await call(ava, 'POST', '/admin/menu/copy', { from: day, dates: [officeDay(41)] })).status, 403);
+  const first = await (await call(noah, 'PUT', `/admin/menu/day/${day}`, { items })).json();
+  assert.equal(first.items.length, 3);
+  assert.equal(first.duplicatesDropped, 1);
+  assert.deepEqual(first.previous, []);
+  const dal = first.items.find((item) => item.name === 'Dal tadka');
+  assert.equal((await (await call(ava, 'POST', `/menu/${dal.id}/like`)).json()).liked, true);
+
+  const second = await (await call(noah, 'PUT', `/admin/menu/day/${day}`, { items: [dish('lunch', 'Paneer tikka', { course: 'starters' }), dish('lunch', 'DAL TADKA', { diet: 'vegan' }), dish('dinner', 'Soup', { course: 'starters', diet: 'egg' })] })).json();
+  assert.equal(second.items.find((item) => item.name === 'DAL TADKA').id, dal.id, 'same meal and name keeps the dish');
+  assert.deepEqual(second.counts, { added: 1, updated: 2, removed: 1 });
+  assert.equal(second.previous.length, 3);
+
+  const renamed = await (await call(noah, 'PUT', `/admin/menu/day/${day}`, { items: [{ id: dal.id, ...dish('lunch', 'Dal makhani', { diet: 'vegan' }) }, dish('lunch', 'Jeera rice', { course: 'breads-rice' })] })).json();
+  assert.equal(renamed.items[0].id, dal.id, 'a rename by id keeps the dish');
+  const window = await (await call(ava, 'GET', `/menu?from=${day}&days=1`)).json();
+  assert.deepEqual(window.items.map((item) => `${item.name}:${item.likes}:${item.liked}`), ['Dal makhani:1:true', 'Jeera rice:0:false'], 'likes survive, order follows breads/rice after mains');
+  assert.equal((await db.query("SELECT COUNT(*)::int AS n FROM audit_log WHERE action = 'menu.day-saved' AND entity_id = $1", [day])).rows[0].n, 3);
+
+  for (const [label, body, status] of [
+    ['not a list', { items: 'Idli' }, 400], ['bad meal', { items: [dish('brunch', 'Idli')] }, 400], ['bad course', { items: [dish('lunch', 'Idli', { course: 'sweets' })] }, 400],
+    ['bad diet', { items: [dish('lunch', 'Idli', { diet: 'meat' })] }, 400], ['no name', { items: [dish('lunch', '  ')] }, 400], ['long name', { items: [dish('lunch', 'x'.repeat(81))] }, 400],
+    ['control character', { items: [dish('lunch', 'Id\u0000li')] }, 400], ['too many', { items: Array.from({ length: 301 }, (_, i) => dish('lunch', `Dish ${i}`)) }, 400],
+  ]) assert.equal((await call(noah, 'PUT', `/admin/menu/day/${day}`, body)).status, status, label);
+  assert.equal((await menuDay(noah, day)).length, 2, 'rejected saves change nothing');
+  assert.equal((await call(noah, 'PUT', '/admin/menu/day/2026-02-31', { items: [] })).status, 400);
+  assert.equal((await call(noah, 'PUT', `/admin/menu/day/${officeDay(-30)}`, { items: [] })).status, 400);
+  assert.equal((await call(noah, 'PUT', `/admin/menu/day/${officeDay(400)}`, { items: [] })).status, 400);
+  assert.equal((await (await call(noah, 'PUT', `/admin/menu/day/${day}`, { items: [] })).json()).items.length, 0, 'an empty list clears the day');
+});
+
+test('menu day editor: a failure half way through rolls the whole save back', async () => {
+  const noah = await signIn('noah@demo.gcc');
+  const day = officeDay(42);
+  const saved = await (await call(noah, 'PUT', `/admin/menu/day/${day}`, { items: [dish('lunch', 'Alpha'), dish('lunch', 'Beta')] })).json();
+  await db.exec(`CREATE FUNCTION menu_boom() RETURNS trigger AS $$ BEGIN IF NEW.name = 'Explode' THEN RAISE EXCEPTION 'boom'; END IF; RETURN NEW; END $$ LANGUAGE plpgsql;
+    CREATE TRIGGER menu_boom BEFORE INSERT ON menu_items FOR EACH ROW EXECUTE FUNCTION menu_boom();`);
+  try {
+    const failed = await call(noah, 'PUT', `/admin/menu/day/${day}`, { items: [dish('lunch', 'Gamma'), dish('lunch', 'Explode')] });
+    assert.equal(failed.status, 500);
+  } finally {
+    await db.exec('DROP TRIGGER menu_boom ON menu_items; DROP FUNCTION menu_boom()');
+  }
+  assert.deepEqual((await menuDay(noah, day)).map((item) => `${item.id}:${item.name}`).sort(), saved.items.map((item) => `${item.id}:${item.name}`).sort());
+});
+
+test('the menu window is one cached call with a private ETag, and the legacy single-dish routes still work', async () => {
+  const ava = await signIn();
+  const first = await call(ava, 'GET', '/menu');
+  assert.equal(first.status, 200);
+  assert.match(first.headers.get('cache-control'), /private/);
+  const body = await first.json();
+  assert.equal(body.visibility, 'summary');
+  assert.equal(body.historyDays, 7);
+  assert.equal(body.from, officeDay(-7));
+  assert.equal(body.to, officeDay(7));
+  assert.ok(Array.isArray(body.items) && body.mine && body.ratings && body.dishRatings);
+  const again = await getRaw(ava, '/menu', { 'If-None-Match': first.headers.get('etag') });
+  assert.equal(again.status, 304);
+  const noah = await signIn('noah@demo.gcc');
+  const day = officeDay(43);
+  assert.equal((await call(noah, 'POST', '/admin/menu', { date: day, meal: 'snacks', name: 'Bonda', course: 'starters', emoji: '' })).status, 201);
+  const one = (await menuDay(noah, day))[0];
+  assert.deepEqual([one.meal, one.course, one.name, one.emoji], ['snacks', 'starters', 'Bonda', '']);
+  assert.equal((await call(noah, 'DELETE', `/admin/menu/${one.id}`)).status, 204);
+});
+
+test('menu copy and templates: one call puts a day on several dates, and a template can be applied to chosen dates', async () => {
+  const [noah, ava] = await Promise.all([signIn('noah@demo.gcc'), signIn()]);
+  const [source, a, b, c] = [officeDay(50), officeDay(51), officeDay(52), officeDay(53)];
+  await call(noah, 'PUT', `/admin/menu/day/${source}`, { items: [dish('lunch', 'Dal'), dish('lunch', 'Rice', { course: 'breads-rice' }), dish('dinner', 'Soup', { course: 'starters' })] });
+  await call(noah, 'PUT', `/admin/menu/day/${b}`, { items: [dish('lunch', 'Extra'), dish('lunch', 'Dal')] });
+  const dalOnB = (await menuDay(noah, b)).find((item) => item.name === 'Dal').id;
+  assert.deepEqual(await (await call(noah, 'POST', '/admin/menu/copy', { from: source, dates: [a, source] })).json(), { days: 2, dates: [a, source] });
+  assert.equal((await menuDay(noah, a)).length, 3);
+  assert.equal((await call(noah, 'POST', '/admin/menu/copy', { from: source, dates: [b], replace: false })).status, 200);
+  assert.deepEqual((await menuDay(noah, b)).map((item) => item.name).sort(), ['Dal', 'Extra', 'Rice', 'Soup']);
+  assert.equal((await menuDay(noah, b)).find((item) => item.name === 'Dal').id, dalOnB, 'appending keeps the dishes that were already there');
+  assert.equal((await call(noah, 'POST', '/admin/menu/copy', { items: [dish('lunch', 'Fresh')], dates: [c] })).status, 200);
+  assert.deepEqual((await menuDay(noah, c)).map((item) => item.name), ['Fresh']);
+  for (const body of [{ from: source, dates: Array.from({ length: 15 }, (_, i) => officeDay(60 + i)) }, { from: source, dates: [officeDay(-30)] }, { from: officeDay(80), dates: [a] }, { dates: [a] }, { from: source, dates: [] }]) {
+    assert.equal((await call(noah, 'POST', '/admin/menu/copy', body)).status, 400);
+  }
+
+  const items = await menuDay(noah, source);
+  assert.equal((await call(ava, 'GET', '/admin/menu/templates')).status, 403);
+  assert.equal((await call(noah, 'POST', '/admin/menu/templates', { name: 'Monday', items: [] })).status, 400);
+  const made = await (await call(noah, 'POST', '/admin/menu/templates', { name: 'Monday', items })).json();
+  assert.equal(made.count, 3);
+  await call(noah, 'POST', '/admin/menu/templates', { name: 'monday', items: items.slice(0, 1) });
+  const list = (await (await call(noah, 'GET', '/admin/menu/templates')).json()).templates;
+  assert.equal(list.filter((template) => template.name.toLowerCase() === 'monday').length, 1, 'saving a name again replaces it');
+  const template = list.find((entry) => entry.name.toLowerCase() === 'monday');
+  assert.equal((await call(ava, 'POST', `/admin/menu/templates/${template.id}/apply`, { dates: [officeDay(70)] })).status, 403);
+  assert.equal((await call(noah, 'POST', `/admin/menu/templates/${template.id}/apply`, { dates: [officeDay(70), officeDay(71)] })).status, 200);
+  assert.equal((await menuDay(noah, officeDay(71))).length, 1);
+  assert.equal((await (await call(noah, 'GET', `/admin/menu/templates/${template.id}`)).json()).items.length, 1);
+  assert.equal((await call(noah, 'DELETE', `/admin/menu/templates/${template.id}`)).status, 204);
+  assert.equal((await call(noah, 'POST', `/admin/menu/templates/${template.id}/apply`, { dates: [officeDay(70)] })).status, 404);
+});
+
+test('menu reviews: one per person per meal, editable and removable, rated 1 to 5, with the new average in the reply', async () => {
+  const [ava, sam] = await Promise.all([signIn(), signIn('sam@demo.gcc')]);
+  const day = officeDay(-2);
+  await seedDish('rev-a', day, 'lunch', 'Rasam');
+  await seedDish('rev-b', day, 'lunch', 'Curd rice');
+  const review = (session, body) => call(session, 'PUT', '/menu/review', { date: day, meal: 'lunch', ...body });
+  const first = await (await review(ava, { rating: 4, comment: 'Tasty', dishes: [{ itemId: 'rev-a', rating: 5 }] })).json();
+  assert.deepEqual(first.rating, { avg: 4, count: 1 });
+  assert.deepEqual(first.dishRatings['rev-a'], { avg: 5, count: 1 });
+  assert.equal(first.mine.meal.comment, 'Tasty');
+  const edited = await (await review(ava, { rating: 2, comment: 'Cold today', anonymous: true, dishes: [{ itemId: 'rev-a', rating: 0 }, { itemId: 'rev-b', rating: 3 }] })).json();
+  assert.deepEqual(edited.rating, { avg: 2, count: 1 }, 'a second review from the same person replaces the first');
+  assert.equal(edited.dishRatings['rev-a'], undefined);
+  assert.equal(edited.mine.meal.anonymous, true);
+  assert.deepEqual((await (await review(sam, { rating: 5 })).json()).rating, { avg: 3.5, count: 2 });
+  assert.equal((await db.query("SELECT COUNT(*)::int AS n FROM menu_reviews WHERE menu_date = $1 AND item_id IS NULL", [day])).rows[0].n, 2);
+  for (const [label, body] of [['zero stars', { rating: 0 }], ['six stars', { rating: 6 }], ['half star', { rating: 3.5 }], ['text rating', { rating: 'five' }], ['long comment', { rating: 3, comment: 'x'.repeat(281) }],
+    ['odd meal', { rating: 3, meal: 'brunch' }], ['stranger dish', { rating: 3, dishes: [{ itemId: 'dish-demo-0-0', rating: 3 }] }], ['bad anonymous flag', { rating: 3, anonymous: 'yes' }], ['bad dish rating', { rating: 3, dishes: [{ itemId: 'rev-a', rating: 9 }] }]]) {
+    assert.equal((await review(ava, body)).status, 400, label);
+  }
+  assert.equal((await review(ava, { rating: 3, meal: 'dinner' })).status, 404, 'no dinner on that day');
+  assert.equal((await review(ava, { rating: 3, date: officeDay(1) })).status, 400, 'tomorrow cannot be reviewed yet');
+  assert.equal((await review(ava, { rating: 3, date: officeDay(-20) })).status, 400, 'menus older than the history are gone');
+  const noCsrf = await fetch(`${baseUrl}/api/menu/review`, { method: 'PUT', headers: { Cookie: ava.cookie, 'Content-Type': 'application/json' }, body: JSON.stringify({ date: day, meal: 'lunch', rating: 3 }) });
+  assert.equal(noCsrf.status, 403);
+  assert.equal((await fetch(`${baseUrl}/api/menu/review`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status, 401);
+  const removed = await (await call(ava, 'DELETE', `/menu/review?date=${day}&meal=lunch`)).json();
+  assert.deepEqual(removed.rating, { avg: 5, count: 1 });
+  assert.equal(removed.mine.meal, null);
+  assert.deepEqual(removed.mine.dishes, {});
+  assert.equal((await call(ava, 'DELETE', `/menu/review?date=${day}&meal=lunch`)).status, 200, 'deleting twice is harmless');
+});
+
+test('menu reviews: who can read what is decided by the server in all three modes, and an anonymous author never leaks', async () => {
+  const [root, ava, sam, noah] = await Promise.all([signIn('root@demo.gcc'), signIn(), signIn('sam@demo.gcc'), signIn('noah@demo.gcc')]);
+  const lee = await makeUser('emp-lee', 'lee@demo.gcc', 'Lee Visitor');
+  const reader = await makeUser('emp-reader', 'reader@demo.gcc', 'Reva Reader', ['menu.reviews.view']);
+  const day = officeDay(-1);
+  await seedDish('vis-a', day, 'dinner', 'Pulao');
+  await call(ava, 'PUT', '/menu/review', { date: day, meal: 'dinner', rating: 5, comment: 'Loved the pulao' });
+  await call(sam, 'PUT', '/menu/review', { date: day, meal: 'dinner', rating: 3, comment: 'Far too salty', anonymous: true });
+  const key = `${day}|dinner`;
+  const list = async (session) => (await call(session, 'GET', `/menu/reviews?date=${day}&meal=dinner`)).json();
+  const windowOf = async (session) => (await call(session, 'GET', `/menu?from=${day}&days=1`)).json();
+  const setMode = async (mode) => assert.equal((await call(root, 'PUT', '/admin/settings', { menuReviewsVisibility: mode })).status, 200);
+  try {
+    await setMode('everyone');
+    let seen = await list(lee);
+    assert.equal(seen.restricted, false);
+    assert.deepEqual(seen.reviews.map((r) => [r.rating, r.author, r.comment]).sort(), [[3, null, 'Far too salty'], [5, 'Ava Chen', 'Loved the pulao']]);
+    assert.deepEqual((await windowOf(lee)).ratings[key], { avg: 4, count: 2 });
+
+    await setMode('summary');
+    assert.deepEqual((await windowOf(lee)).ratings[key], { avg: 4, count: 2 }, 'everyone still sees the average');
+    seen = await list(lee);
+    assert.deepEqual([seen.restricted, seen.reviews], [true, []], 'but not the comments');
+    seen = await list(ava);
+    assert.deepEqual(seen.reviews.map((r) => [r.mine, r.comment]), [[true, 'Loved the pulao']], 'people read their own review');
+    seen = await list(noah);
+    assert.equal(seen.reviews.length, 2);
+    assert.equal((await list(reader)).reviews.length, 2, 'menu.reviews.view alone is enough to read');
+
+    await setMode('managers');
+    const hidden = await windowOf(lee);
+    assert.deepEqual([hidden.ratings, hidden.dishRatings], [{}, {}]);
+    assert.equal((await windowOf(sam)).mine.meals[key].rating, 3, 'a person always sees their own review');
+    assert.equal((await windowOf(noah)).ratings[key].count, 2);
+    assert.equal((await list(lee)).reviews.length, 0);
+    assert.equal((await list(ava)).reviews.length, 1);
+    const own = await (await call(lee, 'PUT', '/menu/review', { date: day, meal: 'dinner', rating: 1 })).json();
+    assert.equal(own.rating, null, 'the reply does not leak the average either');
+    assert.equal(own.mine.meal.rating, 1);
+    await call(lee, 'DELETE', `/menu/review?date=${day}&meal=dinner`);
+
+    // The manager view: only for people who may see reviews, and the anonymous author is never in any answer.
+    assert.equal((await call(lee, 'GET', '/admin/menu/reviews')).status, 403);
+    assert.equal((await call(ava, 'GET', '/admin/menu/reviews')).status, 403);
+    for (const mode of ['everyone', 'summary', 'managers']) {
+      await setMode(mode);
+      for (const session of [lee, ava, sam, noah, reader, root]) {
+        const bodies = [JSON.stringify(await list(session)), JSON.stringify(await windowOf(session))];
+        if (session === noah || session === reader) bodies.push(JSON.stringify(await (await call(session, 'GET', `/admin/menu/reviews?from=${day}&to=${day}`)).json()));
+        for (const body of bodies) assert.doesNotMatch(body, /emp-sam|sam@demo|Sam Rivera/, `${mode}: anonymous author leaked`);
+      }
+    }
+    const manager = await (await call(noah, 'GET', `/admin/menu/reviews?from=${day}&to=${day}&meal=dinner`)).json();
+    assert.deepEqual(manager.summary.map((row) => [row.meal, row.count, row.avg]), [['dinner', 2, 4]]);
+    assert.deepEqual(manager.reviews.map((row) => [row.rating, row.author]).sort(), [[3, null], [5, 'Ava Chen']]);
+    assert.equal(manager.trend.length, 1);
+    assert.equal((await call(noah, 'GET', `/admin/menu/reviews?from=${day}&to=${officeDay(-300)}`)).status, 400);
+    assert.equal((await call(reader, 'PUT', `/admin/menu/day/${officeDay(44)}`, { items: [] })).status, 403, 'reading reviews does not allow editing the menu');
+  } finally {
+    await setMode('summary');
+  }
+});
+
+test('menu settings: reviews visibility and history length are super-admin options with validation', async () => {
+  const [root, noah] = await Promise.all([signIn('root@demo.gcc'), signIn('noah@demo.gcc')]);
+  assert.equal((await call(noah, 'PUT', '/admin/settings', { menuReviewsVisibility: 'everyone' })).status, 403);
+  for (const body of [{ menuReviewsVisibility: 'all' }, { menuHistoryDays: 0 }, { menuHistoryDays: 91 }, { menuHistoryDays: 3.5 }, { menuHistoryDays: '7' }]) {
+    assert.equal((await call(root, 'PUT', '/admin/settings', body)).status, 400, JSON.stringify(body));
+  }
+  const config = await (await call(noah, 'GET', '/config')).json();
+  assert.equal(config.menuReviewsVisibility, 'summary');
+  assert.equal(config.menuHistoryDays, 7);
+  const boot = await (await call(noah, 'GET', '/bootstrap')).json();
+  assert.equal(boot.config.menuReviewsVisibility, 'summary');
+  assert.ok(boot.user.permissions.includes('menu.reviews.view'));
+});
+
+test('menu retention: old menus and reviews are purged at most once a day, a shorter history applies at once, recent days stay', async () => {
+  const [root, ava] = await Promise.all([signIn('root@demo.gcc'), signIn()]);
+  const setDays = async (days) => assert.equal((await call(root, 'PUT', '/admin/settings', { menuHistoryDays: days })).status, 200);
+  const exists = async (id) => (await db.query('SELECT 1 FROM menu_items WHERE id = $1', [id])).rows.length === 1;
+  const reviews = async (day) => (await db.query('SELECT COUNT(*)::int AS n FROM menu_reviews WHERE menu_date = $1', [day])).rows[0].n;
+  await setDays(30);
+  const [old, mid, recent] = [officeDay(-10), officeDay(-5), officeDay(-3)];
+  for (const [id, day] of [['ret-old', old], ['ret-mid', mid], ['ret-recent', recent]]) {
+    await seedDish(id, day, 'lunch', id);
+    await db.query("INSERT INTO menu_reviews (id, menu_date, meal, employee_id, rating) VALUES ($1,$2,'lunch','emp-ava',4)", [`rr-${id}`, day]);
+  }
+  await db.query("INSERT INTO menu_reactions (item_id, employee_id) VALUES ('ret-old','emp-ava')");
+  await setDays(3);
+  assert.deepEqual([await exists('ret-old'), await exists('ret-mid'), await exists('ret-recent')], [false, false, true]);
+  assert.deepEqual([await reviews(old), await reviews(mid), await reviews(recent)], [0, 0, 1], 'reviews of kept days remain');
+  assert.equal((await db.query("SELECT COUNT(*)::int AS n FROM menu_reactions WHERE item_id = 'ret-old'")).rows[0].n, 0);
+  await seedDish('ret-again', old, 'lunch', 'again');
+  assert.equal((await call(ava, 'GET', '/menu')).status, 200);
+  assert.equal(await exists('ret-again'), true, 'the cleanup does not run again the same day');
+  await setDays(7);
+  assert.equal(await exists('ret-again'), false, 'changing the history length runs it once more');
+  assert.equal(await exists('ret-recent'), true);
+  assert.equal((await (await call(ava, 'GET', '/menu')).json()).from, officeDay(-7));
+});

@@ -3,10 +3,12 @@ import m001 from '../server/migrations/001-initial.sql';
 import m002 from '../server/migrations/002-app-files.sql';
 import m003 from '../server/migrations/003-features.sql';
 import m004 from '../server/migrations/004-availability-labels.sql';
+import m005 from '../server/migrations/005-menu-v2.sql';
 
 export const MIGRATIONS = [
   { version: 1, sql: m001 },
   { version: 2, sql: m002 },
   { version: 3, sql: m003 },
   { version: 4, sql: m004 },
+  { version: 5, sql: m005 },
 ];

@@ -8,6 +8,7 @@ import { ManageActivity, ManageUsers } from './ManageUsers';
 import { ManageDashboard } from './ManageDashboard';
 import { ManageContent } from './ManageContent';
 import { ManageMenu } from './ManageMenu';
+import { nav } from '../../lib/nav';
 import { ManageCommunity } from './ManageCommunity';
 import { ManageRoles } from './ManageRoles';
 import { ManageSettings } from './ManageSettings';
@@ -19,7 +20,7 @@ export function ManageScreen({ ctx }: { ctx: Ctx }) {
     ...(has('insights.view') ? [{ id: 'dashboard', label: 'Dashboard', icon: 'chart' }] : []),
     ...(has('spaces.manage') || has('teams.manage') ? [{ id: 'layout', label: 'Map & teams', icon: 'map' }] : []),
     ...(has('content.manage') ? [{ id: 'content', label: 'Content', icon: 'megaphone' }] : []),
-    ...(has('menu.manage') ? [{ id: 'menu', label: 'Food menu', icon: 'utensils' }] : []),
+    ...(has('menu.manage') || has('menu.reviews.view') ? [{ id: 'menu', label: 'Food menu', icon: 'utensils' }] : []),
     ...(has('community.manage') ? [{ id: 'community', label: 'Community', icon: 'heart' }] : []),
     ...(has('qr.manage') ? [{ id: 'qr', label: 'QR codes', icon: 'qr' }] : []),
     ...(has('bookings.manage') ? [{ id: 'bookings', label: 'Bookings', icon: 'ticket' }] : []),
@@ -27,7 +28,7 @@ export function ManageScreen({ ctx }: { ctx: Ctx }) {
     ...(isSuper ? [{ id: 'roles', label: 'Roles', icon: 'shield' }, { id: 'settings', label: 'Settings', icon: 'settings' }] : []),
     ...(has('users.manage') ? [{ id: 'activity', label: 'Activity', icon: 'list' }] : []),
   ], [ctx.user.permissions, isSuper]); // eslint-disable-line react-hooks/exhaustive-deps
-  const [tab, setTab] = useState(tabs[0]?.id ?? 'layout');
+  const [tab, setTab] = useState(() => { const wanted = nav.manageTab; nav.manageTab = ''; return tabs.some((item) => item.id === wanted) ? wanted : tabs[0]?.id ?? 'layout'; });
   const active = tabs.find((item) => item.id === tab) ? tab : tabs[0]?.id;
 
   return (
@@ -39,7 +40,7 @@ export function ManageScreen({ ctx }: { ctx: Ctx }) {
       {active === 'dashboard' && <ManageDashboard />}
       {active === 'layout' && <ManageLayout ctx={ctx} />}
       {active === 'content' && <ManageContent />}
-      {active === 'menu' && <ManageMenu />}
+      {active === 'menu' && <ManageMenu ctx={ctx} />}
       {active === 'community' && <ManageCommunity />}
       {active === 'qr' && <ManageQr />}
       {active === 'bookings' && <ManageBookings />}

@@ -39,4 +39,4 @@ Local development: `npm run db:reset` deletes `data/pglite`.
 
 ## Time and retention
 
-Office dates use `Asia/Kolkata`; instants are stored as `timestamptz`. Sessions last 8 hours and expired rows are purged at sign-in. Bookings and the activity log are kept indefinitely until a retention policy is agreed and a purge job is added.
+Office dates use `Asia/Kolkata`; instants are stored as `timestamptz`. Sessions last 8 hours and expired rows are purged at sign-in. Food menus and their reviews are kept for the number of days set in Settings (default 7; the first menu request of the day purges older ones, guarded by the `menu_cleanup` row in `app_settings`). Bookings and the activity log are kept indefinitely until a retention policy is agreed and a purge job is added.

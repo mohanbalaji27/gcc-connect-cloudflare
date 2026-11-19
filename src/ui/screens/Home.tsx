@@ -2,10 +2,12 @@
 import type { Announcement, Booking, Celebration, FeatureKey, LinkItem, MenuItem, OfficeEvent, Summary, Vibes, WhosIn } from '../../lib/types';
 import { MEALS } from '../../lib/types';
 import { api } from '../../lib/api';
+import { currentMeal } from '../../lib/menuCatalog';
+import { loadMenu } from '../../lib/menuData';
 import { greeting, inIndia, relativeDay, timeRange, todayInIndia } from '../../lib/format';
 import type { Ctx } from '../App';
 import { Avatar, ExternalLink, Icon, Spinner, useKit } from '../kit';
-import { DietDot } from './ManageMenu';
+import { DietDot } from '../MenuBits';
 
 const TIPS = [
   'Tip: zoom into the map to see every seat number.', 'Tip: tap a team colour on the map to highlight where they sit.', 'Fun fact: the first desk booked is usually the one by the window.',
@@ -62,7 +64,7 @@ export function HomeScreen({ ctx }: { ctx: Ctx }) {
     void Promise.all([
       ctx.getSummary(), api<{ bookings: Booking[] }>('/bookings'), api<{ events: OfficeEvent[] }>('/events'),
       flag('announcements') ? quiet(api<{ announcements: Announcement[] }>('/announcements'), { announcements: [] }) : Promise.resolve({ announcements: [] }),
-      flag('menu') ? quiet(api<{ items: MenuItem[] }>(`/menu?from=${today}&days=1`), { items: [] }) : Promise.resolve({ items: [] }),
+      flag('menu') ? quiet(loadMenu().then((window) => ({ items: window.items.filter((item) => item.date === window.today) })), { items: [] as MenuItem[] }) : Promise.resolve({ items: [] as MenuItem[] }),
       flag('whosin') ? quiet(api<WhosIn>('/whosin'), null) : Promise.resolve(null),
       flag('celebrations') ? quiet(api<{ celebrations: Celebration[] }>('/celebrations'), { celebrations: [] }) : Promise.resolve({ celebrations: [] }),
       flag('links') ? quiet(api<{ links: LinkItem[] }>('/links'), { links: [] }) : Promise.resolve({ links: [] }),
@@ -78,6 +80,8 @@ export function HomeScreen({ ctx }: { ctx: Ctx }) {
   const streak = useCountUp(summary?.streak ?? 0);
   const next = bookings?.[0];
   const hour = Number(inIndia(new Date(), { hour: '2-digit', hour12: false })) % 24;
+  const nowMeal = currentMeal(hour, Number(inIndia(new Date(), { minute: '2-digit' })));
+  const mealNow = menu.filter((item) => item.meal === nowMeal);
   const tip = TIPS[Math.floor(Date.now() / 86_400_000) % TIPS.length];
   const visibleNews = news.filter((item) => !dismissed.includes(item.id)).slice(0, 3);
   const nextCelebrations = celebrations.slice(0, 4);
@@ -179,9 +183,9 @@ export function HomeScreen({ ctx }: { ctx: Ctx }) {
       <div className="home-columns">
         {ctx.flag('menu') && (
           <section className="panel">
-            <div className="panel-head"><h2>Today&apos;s menu</h2><button className="text-link" onClick={() => ctx.go('menu')}>Full menu <Icon name="arrow" size={16} /></button></div>
+            <div className="panel-head"><h2>{mealNow.length ? `Today's ${MEALS[nowMeal].label.toLowerCase()}` : 'Today\'s menu'}</h2><button className="text-link" onClick={() => ctx.go('menu')}>Full menu <Icon name="arrow" size={16} /></button></div>
             {menu.length === 0 ? <p className="muted">Nothing posted yet. Check back near lunchtime 🍛</p> : (
-              <ul className="mini-menu">{menu.slice(0, 6).map((item) => <li key={item.id}><span>{item.emoji}</span><div><strong>{item.name} <DietDot diet={item.diet} /></strong><small>{MEALS[item.meal].label}</small></div>{item.likes > 0 && <small>❤️ {item.likes}</small>}</li>)}</ul>
+              <ul className="mini-menu">{(mealNow.length ? mealNow : menu).slice(0, 6).map((item) => <li key={item.id}><span>{item.emoji && item.emoji !== '🍽️' ? item.emoji : MEALS[item.meal].emoji}</span><div><strong>{item.name} <DietDot diet={item.diet} /></strong><small>{MEALS[item.meal].label}</small></div>{item.likes > 0 && <small>❤️ {item.likes}</small>}</li>)}</ul>
             )}
           </section>
         )}

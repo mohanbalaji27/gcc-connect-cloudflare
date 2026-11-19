@@ -5,7 +5,7 @@ info:
   description: |
     Cookie-session API. Sign in with POST /api/login, then send the returned `csrfToken` in `X-CSRF-Token`
     on every non-GET request. Errors are `{ "error": { "code", "message" } }`.
-    Permissions: bookings.manage, events.manage, spaces.manage, teams.manage, qr.manage, users.manage (super_admin has all).
+    Permissions: bookings.manage, events.manage, spaces.manage, teams.manage, qr.manage, users.manage, content.manage, menu.manage, menu.reviews.view, community.manage, insights.view (super_admin has all).
 servers:
   - url: /api
 paths:
@@ -71,14 +71,18 @@ paths:
   /admin/audit: { get: { summary: Recent activity (users.manage) } }
   /public-config: { get: { summary: App name, tagline, welcome note and default theme (no sign-in needed), security: [] } }
   /config: { get: { summary: Branding, feature switches and the feature catalogue } }
-  /admin/settings: { put: { summary: "Turn features on or off, edit branding and options { showBookerNames, eventsRsvpEnabled } (super admin). Bumps the config version" } }
+  /admin/settings: { put: { summary: "Turn features on or off, edit branding and options { showBookerNames, eventsRsvpEnabled }, and the food menu settings menuReviewsVisibility (everyone | summary | managers) and menuHistoryDays (1-90) (super admin). Bumps the config version" } }
   /me/profile: { patch: { summary: Avatar, birthday, and who's-in visibility } }
   /me/vibes: { get: { summary: Points, level and badges } }
   /people: { get: { summary: Name directory for pickers } }
   /links: { get: { summary: Useful links (?manage=1 lets managers read while switched off) } }
   /contacts: { get: { summary: Important contacts } }
-  /menu: { get: { summary: Food menu from a date for up to 31 days, with likes } }
+  /menu: { get: { summary: "The food menu window in one call: { from, to, today, historyDays, visibility, canSeeReviews, items, ratings, dishRatings, mine }. Default window = the kept history + today + 7 days (or ?from=&days=, up to 45). Items carry course, special, likes; ratings follow the menuReviewsVisibility setting. ETag, private" } }
   /menu/{id}/like: { post: { summary: Toggle a like } }
+  /menu/review:
+    put: { summary: "Rate a meal { date, meal, rating 1-5, comment <=280, anonymous, dishes: [{ itemId, rating 0-5 }] }. One per person per meal per day (it replaces your earlier one). Returns the new average and your own ratings. Rate limited" }
+    delete: { summary: "Remove my review of ?date=&meal= (and my dish ratings for that meal)" }
+  /menu/reviews: { get: { summary: "Written reviews of ?date=&meal=. everyone mode: all (anonymous ones without an author); otherwise managers see all and others only their own. Never returns who wrote an anonymous review" } }
   /announcements: { get: { summary: Active announcements (all=1 for managers) } }
   /kudos: { get: { summary: Kudos wall and monthly leaders }, post: { summary: Send a kudos } }
   /kudos/{id}/cheer: { post: { summary: Toggle a cheer } }
@@ -94,8 +98,16 @@ paths:
   /admin/contacts/{id}: { patch: { summary: Edit a contact }, delete: { summary: Delete a contact } }
   /admin/announcements: { post: { summary: Publish an announcement (content.manage) } }
   /admin/announcements/{id}: { patch: { summary: Edit }, delete: { summary: Delete } }
-  /admin/menu: { post: { summary: Add a dish to one or more dates (menu.manage) } }
+  /admin/menu: { post: { summary: Add one dish to one or more dates (menu.manage; the day editor is the usual way) } }
   /admin/menu/{id}: { delete: { summary: Remove a dish } }
+  /admin/menu/day/{date}:
+    get: { summary: "One day's dishes with ids (menu.manage)" }
+    put: { summary: "Replace a whole day in one transaction { items: [{ id?, meal, course, name, diet, description, emoji, special }] } (menu.manage). Dishes keep their ids when the id is sent back or the meal and name match. Max 300 dishes; returns the new dishes, the previous ones (for undo) and counts. Audit-logged" }
+  /admin/menu/copy: { post: { summary: "Put a day's dishes ({ from: date } or { items }) on up to 14 dates { dates, replace } (menu.manage)" } }
+  /admin/menu/templates: { get: { summary: List templates (menu.manage) }, post: { summary: "Save a day as a template { name, items } (same name replaces; max 30)" } }
+  /admin/menu/templates/{id}: { get: { summary: A template's dishes }, delete: { summary: Delete a template } }
+  /admin/menu/templates/{id}/apply: { post: { summary: "Put a template on chosen dates { dates, replace }" } }
+  /admin/menu/reviews: { get: { summary: "Reviews for managers (menu.manage or menu.reviews.view): ?from=&to=&meal=&dish= -> { summary, dishes, trend, reviews }. Anonymous reviews have no author" } }
   /admin/polls: { post: { summary: Create a poll (community.manage) } }
   /admin/polls/{id}/close: { post: { summary: Close a poll } }
   /admin/polls/{id}: { delete: { summary: Delete a poll } }

@@ -1,5 +1,6 @@
 ﻿import { useState } from 'react';
 import type { Branding, FeatureKey, OptionKey } from '../../lib/types';
+import type { ReviewVisibility } from '../../lib/menuCatalog';
 import { api, messageOf } from '../../lib/api';
 import type { Ctx } from '../App';
 import { Field, Switch, useKit } from '../kit';
@@ -9,18 +10,29 @@ const OPTION_HINTS: Partial<Record<OptionKey, string>> = {
   showBookerNames: 'Off by default: people only see that a seat is booked and for when. Managers who can see bookings always see names.',
   eventsRsvpEnabled: 'Turn off to hide the “I’m going” button and the going counts on events.',
 };
+const FEATURE_HINTS: Partial<Record<FeatureKey, string>> = {
+  menu: 'The menu card, the quick day editor for the food team, dish likes and meal reviews. Menus and reviews stay saved while it is off. The settings for it are further down.',
+};
+const VISIBILITY_CHOICES: { id: ReviewVisibility; label: string; hint: string }[] = [
+  { id: 'everyone', label: 'Everyone sees everything', hint: 'Average stars and written comments are public to all signed-in people, with the writer’s name unless they chose to post anonymously.' },
+  { id: 'summary', label: 'Everyone sees the average, the food team reads comments', hint: 'Default. People see the average stars and how many reviews there are. Comments and names go to the food team only. Each person still sees their own review.' },
+  { id: 'managers', label: 'Only the food team sees reviews', hint: 'Nothing is shown to other employees, not even the average. People only see their own review. “Food team” means anyone with the Manage the food menu or Read food menu reviews permission.' },
+];
 
 export function ManageSettings({ ctx }: { ctx: Ctx }) {
   const { toast } = useKit();
   const [features, setFeatures] = useState(ctx.config.features);
   const [branding, setBranding] = useState<Branding>(ctx.config.branding);
   const [options, setOptions] = useState(ctx.config.options);
+  const [visibility, setVisibility] = useState<ReviewVisibility>(ctx.config.menuReviewsVisibility);
+  const [historyDays, setHistoryDays] = useState(String(ctx.config.menuHistoryDays));
   const [busy, setBusy] = useState(false);
+  const historyValid = /^\d+$/.test(historyDays) && Number(historyDays) >= 1 && Number(historyDays) <= 90;
 
   async function save() {
     setBusy(true);
     try {
-      await api('/admin/settings', { method: 'PUT', body: { features, branding, options } });
+      await api('/admin/settings', { method: 'PUT', body: { features, branding, options, menuReviewsVisibility: visibility, menuHistoryDays: Number(historyDays) } });
       // Your own screen updates right now; everyone else's picks the change up within a few minutes (see pulse).
       await ctx.reloadConfig();
       toast('Saved. It is live for you now, and reaches everyone else within a few minutes, or as soon as they return to the app.', 'success');
@@ -34,9 +46,23 @@ export function ManageSettings({ ctx }: { ctx: Ctx }) {
         <p className="muted">Turn parts of the app on or off for everyone. Content stays saved while a feature is off. Changes reach other people within a few minutes, or as soon as they come back to the app.</p>
         <ul className="switch-list">
           {(Object.keys(ctx.config.featureCatalog) as FeatureKey[]).map((key) => (
-            <li key={key}><div><strong>{ctx.config.featureCatalog[key]}</strong></div><Switch checked={features[key]} label={ctx.config.featureCatalog[key]} onChange={(value) => setFeatures({ ...features, [key]: value })} /></li>
+            <li key={key}><div><strong>{ctx.config.featureCatalog[key]}</strong>{FEATURE_HINTS[key] && <small>{FEATURE_HINTS[key]}</small>}</div><Switch checked={features[key]} label={ctx.config.featureCatalog[key]} onChange={(value) => setFeatures({ ...features, [key]: value })} /></li>
           ))}
         </ul>
+        <h2>Food menu</h2>
+        <fieldset className="settings-choice">
+          <legend><strong>Who can read menu reviews</strong></legend>
+          {VISIBILITY_CHOICES.map((choice) => (
+            <label key={choice.id} className={visibility === choice.id ? 'on' : ''}>
+              <input type="radio" name="menu-visibility" checked={visibility === choice.id} onChange={() => setVisibility(choice.id)} />
+              <span><strong>{choice.label}</strong><small>{choice.hint}</small></span>
+            </label>
+          ))}
+        </fieldset>
+        <Field label="Days of menu history to keep" hint="1 to 90. Menus and their reviews older than this are removed automatically (once a day). Seven keeps the last week visible on the menu card.">
+          <input type="number" inputMode="numeric" min={1} max={90} value={historyDays} onChange={(event) => setHistoryDays(event.target.value)} aria-invalid={!historyValid} />
+        </Field>
+        {!historyValid && <small className="field-error" role="alert">Enter a whole number from 1 to 90.</small>}
         <h2>Options</h2>
         <ul className="switch-list">
           {(Object.keys(ctx.config.optionCatalog) as OptionKey[]).map((key) => (
@@ -56,7 +82,7 @@ export function ManageSettings({ ctx }: { ctx: Ctx }) {
           </div>
           <small className="muted">People can still pick their own colours in Me and settings.</small>
         </div>
-        <button className="button button-primary" disabled={busy || !branding.appName.trim()} onClick={() => void save()}>{busy ? 'Saving…' : 'Save settings'}</button>
+        <button className="button button-primary" disabled={busy || !branding.appName.trim() || !historyValid} onClick={() => void save()}>{busy ? 'Saving…' : 'Save settings'}</button>
       </section>
     </div>
   );

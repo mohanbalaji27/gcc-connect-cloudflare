@@ -19,7 +19,8 @@ A friendly, hobby-grade office companion: book desks and rooms on the real floor
   | `qr.manage` | create booking QR codes (expiring or **no expiry**, limited or unlimited uses) |
   | `users.manage` | create people, change roles and permissions, reset passwords, see the activity log |
   | `content.manage` | manage useful links, important contacts and announcements |
-  | `menu.manage` | post the food menu |
+  | `menu.manage` | post and edit the food menu (quick day editor, copies, templates) and read meal reviews |
+  | `menu.reviews.view` | read meal reviews, comments and the ratings trend without being able to edit the menu |
   | `community.manage` | run polls, moderate kudos, read the idea box |
   | `insights.view` | see the insights dashboard |
 
@@ -27,7 +28,7 @@ A friendly, hobby-grade office companion: book desks and rooms on the real floor
 - **Custom roles:** a super admin builds role templates (for example "HR partner", "Facilities", "Culture crew") from any mix of permissions, then gives them to people. Four starters are included.
 - **Everything is switchable:** Manage → Settings lets a super admin turn each feature on or off (links, contacts, menu, announcements, kudos, polls, celebrations, idea box, who's in, points) and set the app name, tagline, welcome note and default colour theme. A few extra options sit under Options: **Show who booked** (names in availability details, off by default) and **“I’m going” on events** (turn off to hide the button and the going counts; the server also refuses RSVPs). Changes reach other people within a few minutes.
 - **Useful stuff:** links to user guides and portals (payments, insurance, anything), an important-contacts directory with tap-to-call and email, announcements on the home page, and links on events.
-- **Food menu:** daily breakfast, lunch, snacks and dinner with diet markers and likes. Menu managers can repeat a dish across days.
+- **Food menu:** a "grand hotel" menu card for everyone, and a fast editor for the food team. See [Food menu](#food-menu) below.
 - **Community:** kudos wall with badges and cheers, polls, birthdays and work anniversaries (birthdays are opt-in), and an anonymous idea box for HR and leaders.
 - **Who's in today**, a visit streak, points, levels and badges, "Sit with my team" and "Surprise me" seat pickers, dark mode, colour themes and emoji avatars.
 - **Insights dashboard** for leaders: desk and room use, booking trends, busiest days, team seat use, most booked spaces, engagement, and plain-English highlights.
@@ -86,6 +87,44 @@ Both files are private and are **never committed** (`local-data/` and `data/` ar
 3. `npm.cmd run db:reset` then `npm.cmd run dev` to load them.
 
 The same two files can be loaded into a running (or deployed) app from **Manage â†’ Map & teams â†’ Plan & seats**: upload the PDF and the seat JSON. The PDF is stored privately in the database and only served after sign-in.
+
+## Food menu
+
+**For everyone** (Food menu): a menu card that opens on today and on the meal that fits the time of day (breakfast until 10:30, lunch until 15:00, evening snacks until 18:00, then dinner). Switch meal with the tabs, change day with the arrows, a swipe or the 7-day strip (the past week, today and what is coming), and filter by veg, non-veg, egg or vegan. Specials are highlighted, every dish has the usual Indian green / red / amber square-dot mark (a leaf for vegan), and the whole day downloads as a one-page PDF (**PDF**, created in the browser; emoji and non-Latin text are left out of the PDF) or prints cleanly (**Print**). Moving between days and meals makes no server calls: `GET /api/menu` returns the whole window (history + upcoming) in one call with an ETag, and likes and reviews update the screen from their own replies.
+
+**Reviews:** anyone signed in can rate a meal for a day (1 to 5 stars, an optional comment of up to 280 characters, optionally anonymous) and optionally rate single dishes. There is one review per person per meal per day; it can be edited or removed, and it is rate limited. **Who can read them is a super-admin setting (Manage -> Settings -> Food menu), enforced by the server:**
+
+| Setting | Employees see | Food team (`menu.manage` or `menu.reviews.view`) sees |
+|---|---|---|
+| `everyone` | average, count, comments and names (not for anonymous reviews) | everything |
+| `summary` (default) | average and count, plus their own review | everything, including comments |
+| `managers` | only their own review | everything |
+
+An anonymous review never exposes its author to anyone, the food team included. Managers also get **Manage -> Food menu -> Reviews**: averages by day and meal, a daily trend, best and weakest dishes, the comments, filters by period, meal and dish, and a CSV export.
+
+**History:** menus and their reviews older than the **days of menu history** setting (1 to 90, default 7) are removed. The cleanup is opportunistic: the first menu request or save of the day (or saving a shorter history in Settings) runs it once, guarded by a row in `app_settings`, so there is no cost on other requests.
+
+**For the food team** (Manage -> Food menu -> Edit menu, `menu.manage`): one screen per day, with a week strip to jump between days.
+
+- **Type or paste** the whole day. A live preview shows exactly what will be saved, with line-by-line notes. The syntax is forgiving:
+
+  ```
+  Lunch                          meal: Breakfast, Lunch, Dinner, Evening snacks (also "== Lunch ==", "Lunch (12:30-2pm)")
+  Starters:                      section: Starters, Mains, Breads & rice, Sides, Desserts, Drinks, Others (no section = Mains)
+  Paneer tikka (v) ★, Fish fry (nv)    dishes on one line separated by commas, or one per line; bullets are optional
+  nv: Chicken curry, Mutton keema      "v:", "nv:", "egg:", "vegan:" mark every dish on the line
+  Gulab jamun (v) - served hot         text after " - " is a note; use (brackets) for a note that contains commas
+  Idli v                               a trailing v / nv, or (v) (nv) (egg) (vegan), or the dots 🟢 🔴 🟡 🌱
+  🍛 Biryani (nv) (special)            a leading emoji is kept; ★ or (special) highlights today's special
+  ```
+
+  Names with chicken, fish and so on are marked non-veg for you when you give no mark, and repeats within a meal are skipped. The parser is a pure function (`src/lib/menuText.ts`) with its own tests.
+- **Grid** editor in sync with the text: tap the dot to cycle veg / non-veg / egg / vegan, rename inline (marks typed in a name are understood), mark a special, move with the arrows, drag or Alt + arrow keys, Enter for a new row, Backspace on an empty row to remove it, and the **...** button for section, meal, note and emoji.
+- **One Save** writes the whole day with a single `PUT /api/admin/menu/day/:date` in one transaction (audit-logged, size limited). Dishes that stay keep their ids, so likes and dish ratings survive edits and renames. **Undo last save** puts the previous version back (dishes that were removed return as new dishes, so their likes are not restored).
+- **Copy from** yesterday, the same weekday last week or any date; **copy to other dates** (up to 14 at once, replace or add); **templates** (save a day, load it into the editor or apply it to chosen dates, e.g. "Monday" on the same weekday for 4 weeks); **clear day**.
+- **Unsaved changes** are flagged, the browser warns before you leave, and a draft is autosaved on the device (restore it from the banner next time).
+
+To add a section, add it to `COURSE_IDS`/`COURSES` in `src/lib/menuCatalog.ts` and `COURSES` in `server/menu-catalog.js` (a test keeps the two files identical). Existing menu rows keep working: the meal id `snacks` is shown as "Evening snacks", and migration 005 puts older dishes under Mains, Drinks or Desserts by name.
 
 ## How the app keeps server calls low
 

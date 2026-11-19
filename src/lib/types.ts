@@ -1,5 +1,7 @@
-﻿export type Role = 'user' | 'admin' | 'super_admin';
-export type Permission = 'bookings.manage' | 'events.manage' | 'spaces.manage' | 'teams.manage' | 'qr.manage' | 'users.manage' | 'content.manage' | 'menu.manage' | 'community.manage' | 'insights.view';
+﻿import type { ReviewVisibility } from './menuCatalog';
+
+export type Role = 'user' | 'admin' | 'super_admin';
+export type Permission = 'bookings.manage' | 'events.manage' | 'spaces.manage' | 'teams.manage' | 'qr.manage' | 'users.manage' | 'content.manage' | 'menu.manage' | 'menu.reviews.view' | 'community.manage' | 'insights.view';
 
 export interface User {
   id: string; email: string; name: string; team: string; role: Role;
@@ -47,6 +49,7 @@ export const PERMISSION_LABELS: Record<Permission, string> = {
   'users.manage': 'Create users, set roles and permissions',
   'content.manage': 'Manage links, contacts and announcements',
   'menu.manage': 'Manage the food menu',
+  'menu.reviews.view': 'Read food menu reviews and comments',
   'community.manage': 'Run polls, moderate kudos, read feedback',
   'insights.view': 'See the insights dashboard',
 };
@@ -56,13 +59,16 @@ export const EVENT_CATEGORIES = ['Learning', 'Community', 'Company', 'Social', '
 export type FeatureKey = 'links' | 'contacts' | 'menu' | 'announcements' | 'kudos' | 'polls' | 'celebrations' | 'feedback' | 'whosin' | 'vibes';
 export interface Branding { appName: string; tagline: string; accent: string; welcome: string }
 export type OptionKey = 'showBookerNames' | 'eventsRsvpEnabled';
-export interface AppConfig { features: Record<FeatureKey, boolean>; branding: Branding; options: Record<OptionKey, boolean>; featureCatalog: Record<FeatureKey, string>; optionCatalog: Record<OptionKey, string>; accents: string[] }
+export interface AppConfig {
+  features: Record<FeatureKey, boolean>; branding: Branding; options: Record<OptionKey, boolean>; featureCatalog: Record<FeatureKey, string>; optionCatalog: Record<OptionKey, string>; accents: string[];
+  menuReviewsVisibility: ReviewVisibility; menuHistoryDays: number;
+}
 export interface Bootstrap {
   configVersion: number; user: User; config: AppConfig; teams: Team[]; unassignedSeats: number; map: MapInfo; summary: Summary;
 }
 export interface LinkItem { id: string; title: string; url: string; description: string; category: string; emoji: string; sort_order: number }
 export interface ContactItem { id: string; name: string; role_title: string; category: string; phone: string; email: string; hours: string; notes: string; emoji: string; sort_order: number }
-export interface MenuItem { id: string; date: string; meal: 'breakfast' | 'lunch' | 'snacks' | 'dinner'; name: string; description: string; diet: 'veg' | 'non-veg' | 'vegan' | 'egg'; emoji: string; likes: number; liked: boolean }
+export type { MenuDish as MenuItem } from './menuData';
 export interface Announcement { id: string; title: string; body: string; emoji: string; pinned: boolean; expires_at: string | null; created_at: string }
 export interface Kudos { id: string; badge: string; message: string; created_at: string; from_id: string; from_name: string; from_avatar: string; to_id: string; to_name: string; to_avatar: string; cheers: number; cheered: boolean }
 export interface Poll { id: string; question: string; options: string[]; counts: number[]; total: number; myVote: number | null; open: boolean; closesAt: string | null }
@@ -93,6 +99,4 @@ export const KUDOS_BADGES: Record<string, { emoji: string; label: string }> = {
   fire: { emoji: '🔥', label: 'On fire' }, helper: { emoji: '🙌', label: 'Lifesaver' }, coffee: { emoji: '☕', label: 'Coffee-worthy' },
 };
 export const AVATARS = ['🦊', '🐼', '🦉', '🐙', '🦄', '🐢', '🦋', '🐬', '🦁', '🐨', '🐝', '🦖', '🌵', '🍕', '🚀', '🎸'];
-export const MEALS: Record<string, { label: string; emoji: string }> = {
-  breakfast: { label: 'Breakfast', emoji: '🥞' }, lunch: { label: 'Lunch', emoji: '🍛' }, snacks: { label: 'Snacks', emoji: '🍪' }, dinner: { label: 'Dinner', emoji: '🌙' },
-};
+export { MEALS } from './menuCatalog';

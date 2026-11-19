@@ -4,6 +4,7 @@ import { api, ApiError, messageOf, onConfigVersion, setCsrf } from '../lib/api';
 import { startPulse } from '../lib/pulse';
 import { clearAvailability } from '../lib/availability';
 import { clearResources } from '../lib/resources';
+import { clearMenu } from '../lib/menuData';
 import { applyTheme } from '../lib/theme';
 import { reloadFloorPlan, resetFloorPlan, type FloorPlanImage } from '../lib/floorplan';
 import { Avatar, Icon, KitProvider, Spinner, useKit, Field } from './kit';
@@ -85,7 +86,7 @@ function Shell() {
     knownVersion.current = boot.configVersion;
     setConfigVersion(boot.configVersion);
     slice('user', boot.user, setUser);
-    slice('config', boot.config, (next) => { setConfig(next); setBranding(next.branding); });
+    slice('config', boot.config, (next) => { setConfig(next); setBranding(next.branding); clearMenu(); });
     slice('teams', { teams: boot.teams, unassigned: boot.unassignedSeats }, (next) => { setTeams(next.teams); setUnassignedSeats(next.unassigned); });
     slice('map', boot.map, setMapInfo);
     summaryCache.current = { value: boot.summary, at: Date.now() };
@@ -151,7 +152,7 @@ function Shell() {
   useEffect(() => {
     if (!ready) return undefined;
     void reloadBootstrap().catch(() => {
-      setConfig((current) => current ?? { features: { links: true, contacts: true, menu: true, announcements: true, kudos: true, polls: true, celebrations: true, feedback: true, whosin: true, vibes: true }, branding: DEFAULT_BRANDING, options: { showBookerNames: false, eventsRsvpEnabled: true }, featureCatalog: {} as AppConfig['featureCatalog'], optionCatalog: {} as AppConfig['optionCatalog'], accents: ['green', 'ocean', 'sunset', 'berry', 'mono'] });
+      setConfig((current) => current ?? { features: { links: true, contacts: true, menu: true, announcements: true, kudos: true, polls: true, celebrations: true, feedback: true, whosin: true, vibes: true }, branding: DEFAULT_BRANDING, options: { showBookerNames: false, eventsRsvpEnabled: true }, featureCatalog: {} as AppConfig['featureCatalog'], optionCatalog: {} as AppConfig['optionCatalog'], accents: ['green', 'ocean', 'sunset', 'berry', 'mono'], menuReviewsVisibility: 'summary', menuHistoryDays: 7 });
     });
     // Any response that reports a newer settings version, and the periodic pulse, both end up here.
     const noticed = (version: number) => { if (knownVersion.current > 0 && version !== knownVersion.current) void reloadBootstrap().catch(() => {}); };
@@ -165,6 +166,7 @@ function Shell() {
     resetFloorPlan();
     clearAvailability();
     clearResources();
+    clearMenu();
     slices.current = {};
     knownVersion.current = 0;
     planVersion.current = null;
