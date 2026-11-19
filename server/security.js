@@ -1,21 +1,10 @@
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 
-export const PERMISSIONS = {
-  'bookings.manage': 'View and cancel anyone’s bookings',
-  'events.manage': 'Create, edit and delete events',
-  'spaces.manage': 'Add, edit, place and retire desks and rooms',
-  'teams.manage': 'Create teams and assign seats to them',
-  'qr.manage': 'Create booking QR codes',
-  'users.manage': 'Create users, change roles and permissions, reset passwords',
-  'content.manage': 'Manage links, contacts and announcements',
-  'menu.manage': 'Manage the food menu',
-  'menu.reviews.view': 'Read food menu reviews and comments (menu.manage includes this)',
-  'community.manage': 'Run polls, moderate kudos, read the feedback box',
-  'insights.view': 'See the insights dashboard',
-};
-export const ALL_PERMISSIONS = Object.keys(PERMISSIONS);
-export const ADMIN_DEFAULT_PERMISSIONS = ALL_PERMISSIONS.filter((permission) => permission !== 'users.manage');
-export const SUPER_ONLY_PERMISSIONS = ['users.manage'];
+import { ALL_PERMISSIONS, RESERVED_PERMISSIONS, expandPermissions } from './permissions.js';
+
+export {
+  PERMISSIONS, ALL_PERMISSIONS, GRANTABLE_PERMISSIONS, ADMIN_DEFAULT_PERMISSIONS, SUPER_GRANT_PERMISSIONS, RESERVED_PERMISSIONS, LEGACY_PERMISSIONS, expandPermissions, permissionCatalog,
+} from './permissions.js';
 export const ROLES = ['user', 'admin', 'super_admin'];
 
 export const sha256 = (value) => createHash('sha256').update(value).digest('hex');
@@ -50,8 +39,10 @@ export function generatePassword() {
 
 export function effectivePermissions(employee) {
   if (employee.role === 'super_admin') return ALL_PERMISSIONS;
-  const merged = new Set([...(employee.permissions ?? []), ...(employee.role_permissions ?? [])]);
-  return ALL_PERMISSIONS.filter((permission) => merged.has(permission));
+  if (employee.role === 'super_admin') return ALL_PERMISSIONS;
+  // Older stored strings (for example `menu.manage`) are expanded, so nobody loses access when permissions get finer.
+  // Reserved permissions belong to the super admin role alone, whatever a stored list says.
+  return expandPermissions([...(employee.permissions ?? []), ...(employee.role_permissions ?? [])]).filter((id) => !RESERVED_PERMISSIONS.includes(id));
 }
 // Accepts only http(s) links so a stored URL can never be a javascript: or data: address.
 export function safeUrl(value, label = 'Link') {

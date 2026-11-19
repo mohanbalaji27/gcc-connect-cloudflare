@@ -8,7 +8,7 @@ const db = await PGlite.create();
 const server = new PGLiteSocketServer({ db, port: 54329, host: '127.0.0.1' });
 await server.start();
 
-const child = spawn(process.execPath, ['--test'], {
+const child = spawn(process.execPath, ['--test', '--test-concurrency=1'], {
   stdio: 'inherit',
   env: { ...process.env, DATABASE_URL: 'postgres://postgres:postgres@127.0.0.1:54329/postgres', DATABASE_POOL_MAX: '1' },
 });

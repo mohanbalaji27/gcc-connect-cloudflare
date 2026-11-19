@@ -3,8 +3,8 @@ import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { createReadStream, existsSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
-  ALL_PERMISSIONS, ADMIN_DEFAULT_PERMISSIONS, PERMISSIONS, ROLES,
-  effectivePermissions, generatePassword, hashPassword, verifyPassword, sha256, cleanLinks,
+  ALL_PERMISSIONS, ADMIN_DEFAULT_PERMISSIONS, SUPER_GRANT_PERMISSIONS, RESERVED_PERMISSIONS, LEGACY_PERMISSIONS, PERMISSIONS, ROLES,
+  effectivePermissions, expandPermissions, generatePassword, hashPassword, verifyPassword, sha256, cleanLinks,
 } from './security.js';
 import { gridPlacement, validCalibration, DEFAULT_CALIBRATION } from './layout.js';
 import { importInventory } from './inventory.js';
@@ -103,10 +103,11 @@ export function createApp(db, options = {}) {
     return CONFIG_ACTIONS.test(action) ? bumpConfigVersion(client) : null;
   };
   const userView = (row) => ({
-    id: row.id, email: row.email, name: row.name, team: row.team, role: row.role,
+    id: row.id, email: row.email ?? '', name: row.name, team: row.team, role: row.role,
     permissions: effectivePermissions(row), mustChangePassword: row.must_change_password,
     avatar: row.avatar ?? '', roleName: row.role_name ?? null, showInWhosin: row.show_in_whosin ?? true,
     birthMonth: row.birth_month ?? null, birthDay: row.birth_day ?? null,
+    username: row.username ?? null, simpleUi: row.simple_ui === true, landing: row.landing ?? '',
   });
 
   app.use('/api', async (req, res, next) => {
@@ -116,7 +117,7 @@ export function createApp(db, options = {}) {
       try { decoded = decodeURIComponent(token); } catch { decoded = ''; }
       const { rows } = await db.query(`
         SELECT s.csrf_token, e.id, e.email, e.name, e.team, e.role, e.permissions, e.must_change_password,
-               e.avatar, e.show_in_whosin, e.birth_month, e.birth_day, COALESCE(cr.permissions, '{}') AS role_permissions, cr.name AS role_name,
+               e.avatar, e.show_in_whosin, e.birth_month, e.birth_day, e.username, COALESCE(cr.permissions, '{}') AS role_permissions, cr.name AS role_name, cr.simple_ui, cr.landing,
                (SELECT value FROM app_settings WHERE key = 'config_version') AS config_version
         FROM sessions s JOIN employees e ON e.id = s.employee_id LEFT JOIN custom_roles cr ON cr.id = e.custom_role_id
         WHERE s.token_hash = $1 AND s.expires_at > now() AND e.active = TRUE`, [sha256(decoded)]);
@@ -157,14 +158,16 @@ export function createApp(db, options = {}) {
 
   // ---------- Authentication ----------
   app.post('/api/login', async (req, res) => {
-    const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+    // One box for either the work email or a username / employee ID. The answer never says which of the two was wrong.
+    const rawLogin = typeof req.body?.login === 'string' ? req.body.login : typeof req.body?.email === 'string' ? req.body.email : '';
+    const email = rawLogin.trim().toLowerCase();
     const password = typeof req.body?.password === 'string' ? req.body.password : '';
-    if (email.length > 200 || password.length > 200) throw fail(400, 'INVALID_INPUT', 'Enter a valid email and password.');
+    if (email.length > 200 || password.length > 200) throw fail(400, 'INVALID_INPUT', 'Enter a valid email or username and password.');
     const ipKey = `login-ip:${req.ip}`;
     const accountKey = `login-account:${req.ip}:${sha256(email)}`;
     const blocked = (key, maximum) => { const bucket = rateBuckets.get(key); return bucket && bucket.until > Date.now() && bucket.count >= maximum; };
     if (blocked(ipKey, 60) || blocked(accountKey, 8)) throw fail(429, 'RATE_LIMITED', 'Too many sign-in attempts. Wait a little and try again.');
-    const { rows } = await db.query(`SELECT e.*, COALESCE(cr.permissions, '{}') AS role_permissions, cr.name AS role_name FROM employees e LEFT JOIN custom_roles cr ON cr.id = e.custom_role_id WHERE e.email = $1 AND e.active = TRUE`, [email]);
+    const { rows } = await db.query(`SELECT e.*, COALESCE(cr.permissions, '{}') AS role_permissions, cr.name AS role_name, cr.simple_ui, cr.landing FROM employees e LEFT JOIN custom_roles cr ON cr.id = e.custom_role_id WHERE (e.email = $1 OR lower(e.username) = $1) AND e.active = TRUE LIMIT 1`, [email]);
     const employee = rows[0];
     const passwordOk = verifyPassword(password, employee?.password_hash);
     if (!employee || !passwordOk) {
@@ -266,7 +269,7 @@ export function createApp(db, options = {}) {
       ORDER BY r.type, r.label LIMIT 2000`, [type ?? null, pattern]);
     let busy = new Map();
     if (startsAt) {
-      const manager = req.user.permissions.includes('bookings.manage');
+      const manager = req.user.permissions.includes('bookings.view_all');
       const conflicts = await db.query(`
         SELECT b.resource_id, e.name FROM bookings b JOIN employees e ON e.id = b.employee_id
         WHERE b.status = 'confirmed' AND b.starts_at < $2 AND b.ends_at > $1`, [new Date(startsAt), new Date(endsAt)]);
@@ -317,7 +320,7 @@ export function createApp(db, options = {}) {
     res.json({ bookings: rows });
   });
 
-  app.get('/api/admin/bookings', requirePermission('bookings.manage'), async (_req, res) => {
+  app.get('/api/admin/bookings', requirePermission('bookings.view_all'), async (_req, res) => {
     const { rows } = await db.query(`
       SELECT b.id, b.resource_id, b.starts_at, b.ends_at, b.status, r.type, r.label, e.name AS employee_name, e.email AS employee_email
       FROM bookings b JOIN resources r ON r.id = b.resource_id JOIN employees e ON e.id = b.employee_id
@@ -398,7 +401,7 @@ export function createApp(db, options = {}) {
   app.delete('/api/bookings/:id', requireAuth, requireCsrf, async (req, res) => {
     const booking = (await db.query("SELECT id, employee_id, ends_at FROM bookings WHERE id = $1 AND status = 'confirmed'", [req.params.id])).rows[0];
     if (!booking) throw fail(404, 'BOOKING_NOT_FOUND', 'This booking is no longer available.');
-    if (booking.employee_id !== req.user.id && !req.user.permissions.includes('bookings.manage')) throw fail(403, 'NOT_BOOKING_OWNER', 'You can only cancel your own bookings.');
+    if (booking.employee_id !== req.user.id && !req.user.permissions.includes('bookings.cancel_others')) throw fail(403, 'NOT_BOOKING_OWNER', 'You can only cancel your own bookings.');
     if (new Date(booking.ends_at).getTime() <= Date.now()) throw fail(409, 'BOOKING_ENDED', 'That booking is already over, so it stays in the history.');
     await db.tx(async (tx) => {
       // The status guard makes a double tap (or two admins) cancel and log exactly once.
@@ -423,7 +426,7 @@ export function createApp(db, options = {}) {
     const dayStart = new Date(`${date}T00:00:00+05:30`);
     const dayEnd = new Date(dayStart.getTime() + DAY_MS);
     const { options: settings } = await readSettings();
-    const showNames = settings.showBookerNames === true || req.user.permissions.includes('bookings.manage');
+    const showNames = settings.showBookerNames === true || req.user.permissions.includes('bookings.view_all');
     const { rows } = await db.query(`
       SELECT b.resource_id, b.starts_at, b.ends_at, b.employee_id, now() AS read_at${showNames ? ', e.name' : ''}
       FROM bookings b ${showNames ? 'JOIN employees e ON e.id = b.employee_id' : ''}
@@ -471,7 +474,7 @@ export function createApp(db, options = {}) {
     res.json({ rsvpEnabled: showRsvp, events: rows.map((row) => ({ ...row, going_count: showRsvp ? row.going_count : 0, going: showRsvp && Boolean(row.going) })) });
   });
 
-  app.post('/api/events', requirePermission('events.manage'), requireCsrf, async (req, res) => {
+  app.post('/api/events', requirePermission('events.create'), requireCsrf, async (req, res) => {
     const input = eventBody(req.body);
     checkEventTimes(Date.parse(input.startsAt), Date.parse(input.endsAt));
     const id = randomUUID();
@@ -485,7 +488,7 @@ export function createApp(db, options = {}) {
     res.status(201).json({ id });
   });
 
-  app.patch('/api/events/:id', requirePermission('events.manage'), requireCsrf, async (req, res) => {
+  app.patch('/api/events/:id', requirePermission('events.edit'), requireCsrf, async (req, res) => {
     const existing = (await db.query('SELECT * FROM events WHERE id = $1', [req.params.id])).rows[0];
     if (!existing) throw fail(404, 'EVENT_NOT_FOUND', 'This event no longer exists.');
     const input = eventBody(req.body, true);
@@ -502,7 +505,7 @@ export function createApp(db, options = {}) {
     res.status(204).end();
   });
 
-  app.delete('/api/events/:id', requirePermission('events.manage'), requireCsrf, async (req, res) => {
+  app.delete('/api/events/:id', requirePermission('events.delete'), requireCsrf, async (req, res) => {
     const existing = (await db.query('SELECT id, title FROM events WHERE id = $1', [req.params.id])).rows[0];
     if (!existing) throw fail(404, 'EVENT_NOT_FOUND', 'This event no longer exists.');
     await db.tx(async (tx) => {
@@ -570,7 +573,7 @@ export function createApp(db, options = {}) {
     res.status(204).end();
   });
 
-  app.get('/api/admin/employee-options', requireAnyPermissions('qr.manage', 'users.manage'), async (_req, res) => {
+  app.get('/api/admin/employee-options', requireAnyPermissions('qr.manage', 'users.view', 'users.create', 'issues.assign', 'notifications.route'), async (_req, res) => {
     const { rows } = await db.query('SELECT id, name, email FROM employees WHERE active = TRUE ORDER BY name LIMIT 500');
     res.json({ employees: rows });
   });
@@ -799,16 +802,29 @@ export function createApp(db, options = {}) {
   });
 
   // ---------- Users and permissions ----------
+  // Accepts current and older permission strings; older ones are expanded. Settings and role management are reserved for the super admin role.
   const permissionList = (value) => {
-    if (!Array.isArray(value) || value.some((item) => !ALL_PERMISSIONS.includes(item))) throw fail(400, 'INVALID_PERMISSIONS', 'Choose permissions from the list.');
-    return [...new Set(value)];
+    if (!Array.isArray(value) || value.length > 100 || value.some((item) => typeof item !== 'string' || (!ALL_PERMISSIONS.includes(item) && !LEGACY_PERMISSIONS[item]))) throw fail(400, 'INVALID_PERMISSIONS', 'Choose permissions from the list.');
+    if (value.some((item) => RESERVED_PERMISSIONS.includes(item))) throw fail(400, 'INVALID_PERMISSIONS', 'Settings and role management belong to the super admin role and cannot be given to others.');
+    return expandPermissions(value);
   };
-  const employeeView = (row) => ({ id: row.id, email: row.email, name: row.name, team: row.team, role: row.role, active: row.active, permissions: effectivePermissions(row), ownPermissions: row.permissions, customRoleId: row.custom_role_id, joinedOn: row.joined_on ?? '', createdAt: row.created_at });
+  const USERNAME_PATTERN = /^[A-Za-z0-9._-]{3,32}$/;
+  const usernameOf = (value) => {
+    if (value === undefined) return undefined;
+    if (value === null || value === '') return null;
+    if (typeof value !== 'string' || !USERNAME_PATTERN.test(value.trim())) throw fail(400, 'INVALID_USERNAME', 'A username is 3 to 32 letters, numbers, dots, dashes or underscores.');
+    return value.trim();
+  };
+  const employeeView = (row) => ({
+    id: row.id, email: row.email ?? '', username: row.username ?? null, name: row.name, team: row.team, role: row.role, active: row.active,
+    permissions: effectivePermissions(row), ownPermissions: expandPermissions(row.permissions), customRoleId: row.custom_role_id, joinedOn: row.joined_on ?? '', createdAt: row.created_at,
+  });
   const roleTemplate = async (client, id) => {
     if (id === null || id === undefined || id === '') return null;
-    const found = typeof id === 'string' ? (await client.query('SELECT id, permissions FROM custom_roles WHERE id = $1', [id])).rows[0] : null;
+    const found = typeof id === 'string' ? (await client.query('SELECT id, permissions, system_key FROM custom_roles WHERE id = $1', [id])).rows[0] : null;
     if (!found) throw fail(400, 'INVALID_ROLE_TEMPLATE', 'Choose an existing role template.');
-    return found;
+    if (found.system_key === 'super_admin') throw fail(400, 'INVALID_ROLE_TEMPLATE', 'Choose “Super admin” in the Role field instead of using it as a template.');
+    return { ...found, permissions: expandPermissions(found.permissions) };
   };
   const joinedDate = (value) => {
     if (value === undefined) return undefined;
@@ -817,46 +833,56 @@ export function createApp(db, options = {}) {
     return value;
   };
   const superOnly = () => fail(403, 'SUPER_ADMIN_REQUIRED', 'Only a super admin can do that.');
-  // People who are not super admins may only hand out permissions they hold themselves, never `users.manage`.
+  const sameSet = (a, b) => a.length === b.length && a.every((item) => b.includes(item));
+  // People who are not super admins may only hand out permissions they hold themselves, and never the super-admin-only ones.
   const assertGrantable = (actor, added) => {
     if (actor.role === 'super_admin') return;
-    if (added.some((permission) => permission === 'users.manage' || !actor.permissions.includes(permission))) throw superOnly();
+    if (added.some((permission) => SUPER_GRANT_PERMISSIONS.includes(permission) || !actor.permissions.includes(permission))) throw superOnly();
   };
 
-  app.get('/api/admin/users', requirePermission('users.manage'), async (_req, res) => {
-    const { rows } = await db.query('SELECT e.id, e.email, e.name, e.team, e.role, e.permissions, e.active, e.created_at, e.custom_role_id, to_char(e.joined_on, \'YYYY-MM-DD\') AS joined_on, COALESCE(cr.permissions, \'{}\') AS role_permissions FROM employees e LEFT JOIN custom_roles cr ON cr.id = e.custom_role_id ORDER BY e.active DESC, e.name LIMIT 500');
-    const roles = (await db.query('SELECT id, name, emoji, description, permissions FROM custom_roles ORDER BY name')).rows;
-    res.json({ users: rows.map(employeeView), permissionCatalog: PERMISSIONS, adminDefaults: ADMIN_DEFAULT_PERMISSIONS, roles });
+  app.get('/api/admin/users', requireAnyPermissions('users.view', 'users.create', 'users.edit', 'users.change_roles', 'users.reset_password'), async (_req, res) => {
+    const { rows } = await db.query('SELECT e.id, e.email, e.username, e.name, e.team, e.role, e.permissions, e.active, e.created_at, e.custom_role_id, to_char(e.joined_on, \'YYYY-MM-DD\') AS joined_on, COALESCE(cr.permissions, \'{}\') AS role_permissions FROM employees e LEFT JOIN custom_roles cr ON cr.id = e.custom_role_id ORDER BY e.active DESC, e.name LIMIT 500');
+    const roles = (await db.query('SELECT id, name, emoji, description, permissions, system_key, simple_ui FROM custom_roles ORDER BY (system_key IS NULL), name')).rows;
+    res.json({
+      users: rows.map(employeeView),
+      roles: roles.filter((role) => role.system_key !== 'super_admin').map((role) => ({ id: role.id, name: role.name, emoji: role.emoji, description: role.description, permissions: expandPermissions(role.permissions), systemKey: role.system_key, simpleUi: role.simple_ui })),
+    });
   });
 
-  app.post('/api/admin/users', requirePermission('users.manage'), requireCsrf, async (req, res) => {
-    const email = text(req.body?.email, 200, { required: true, label: 'Email' }).toLowerCase();
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw fail(400, 'INVALID_EMAIL', 'Enter a valid email address.');
+  app.post('/api/admin/users', requirePermission('users.create'), requireCsrf, async (req, res) => {
+    const rawEmail = text(req.body?.email, 200, { label: 'Email' });
+    const email = rawEmail ? rawEmail.toLowerCase() : null;
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw fail(400, 'INVALID_EMAIL', 'Enter a valid email address.');
+    const username = usernameOf(req.body?.username) ?? null;
+    if (!email && !username) throw fail(400, 'LOGIN_REQUIRED', 'Give the person a work email, a username (employee ID), or both.');
     const name = text(req.body?.name, 100, { required: true, label: 'Name' });
     const team = text(req.body?.team, 100, { label: 'Team' }) ?? '';
     const role = req.body?.role ?? 'user';
     if (!ROLES.includes(role)) throw fail(400, 'INVALID_ROLE', 'Choose a supported role.');
     if (role === 'super_admin' && req.user.role !== 'super_admin') throw superOnly();
     const permissions = role === 'super_admin' ? [] : permissionList(req.body?.permissions ?? (role === 'admin' ? ADMIN_DEFAULT_PERMISSIONS.filter((p) => req.user.permissions.includes(p)) : []));
-    assertGrantable(req.user, permissions);
     const template = await roleTemplate(db, req.body?.customRoleId);
+    // Making someone more than a plain employee is a role change, which needs its own permission.
+    if ((role !== 'user' || permissions.length || template) && !req.user.permissions.includes('users.change_roles')) throw fail(403, 'PERMISSION_REQUIRED', 'You can create people as employees. Choosing roles and permissions needs the “Change roles and permissions” permission.');
+    assertGrantable(req.user, permissions);
     if (template) assertGrantable(req.user, template.permissions);
     const joinedOn = joinedDate(req.body?.joinedOn) ?? null;
     let password = req.body?.password;
     const generated = password === undefined || password === '';
     if (generated) password = generatePassword();
     else if (typeof password !== 'string' || password.length < 10 || password.length > 128) throw fail(400, 'WEAK_PASSWORD', 'Use a password with at least 10 characters.');
-    if ((await db.query('SELECT 1 FROM employees WHERE email = $1', [email])).rows[0]) throw fail(409, 'EMAIL_IN_USE', 'Someone already has that email address.');
+    if (email && (await db.query('SELECT 1 FROM employees WHERE email = $1', [email])).rows[0]) throw fail(409, 'EMAIL_IN_USE', 'Someone already has that email address.');
+    if (username && (await db.query('SELECT 1 FROM employees WHERE lower(username) = lower($1)', [username])).rows[0]) throw fail(409, 'USERNAME_IN_USE', 'Someone already has that username.');
     const id = randomUUID();
     await db.tx(async (tx) => {
-      await tx.query('INSERT INTO employees (id, email, name, team, role, permissions, password_hash, must_change_password, custom_role_id, joined_on) VALUES ($1,$2,$3,$4,$5,$6,$7,TRUE,$8,$9)', [id, email, name, team, role, permissions, hashPassword(password), template?.id ?? null, joinedOn]);
-      await audit(tx, req.user.id, 'user.created', id, `${email} (${role})`);
+      await tx.query('INSERT INTO employees (id, email, username, name, team, role, permissions, password_hash, must_change_password, custom_role_id, joined_on) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,TRUE,$9,$10)', [id, email, username, name, team, role, permissions, hashPassword(password), template?.id ?? null, joinedOn]);
+      await audit(tx, req.user.id, 'user.created', id, `${email ?? username} (${role})`);
     });
     res.status(201).json({ id, temporaryPassword: password });
   });
 
-  app.patch('/api/admin/users/:id', requirePermission('users.manage'), requireCsrf, async (req, res) => {
-    const employee = (await db.query('SELECT * FROM employees WHERE id = $1', [req.params.id])).rows[0];
+  app.patch('/api/admin/users/:id', requireAnyPermissions('users.edit', 'users.change_roles'), requireCsrf, async (req, res) => {
+    const employee = (await db.query("SELECT *, to_char(joined_on, 'YYYY-MM-DD') AS joined_text FROM employees WHERE id = $1", [req.params.id])).rows[0];
     if (!employee) throw fail(404, 'EMPLOYEE_NOT_FOUND', 'This person no longer exists.');
     const name = text(req.body?.name, 100, { label: 'Name' }) || employee.name;
     const team = text(req.body?.team, 100, { label: 'Team' }) ?? employee.team;
@@ -864,37 +890,49 @@ export function createApp(db, options = {}) {
     if (!ROLES.includes(role)) throw fail(400, 'INVALID_ROLE', 'Choose a supported role.');
     if (req.body?.active !== undefined && typeof req.body.active !== 'boolean') throw fail(400, 'INVALID_STATUS', 'Choose an active or suspended status.');
     const active = req.body?.active ?? employee.active;
-    let permissions = req.body?.permissions !== undefined ? permissionList(req.body.permissions) : employee.permissions;
+    const username = usernameOf(req.body?.username);
+    const nextUsername = username === undefined ? employee.username : username;
+    if (!employee.email && !nextUsername) throw fail(400, 'LOGIN_REQUIRED', 'This person has no work email, so they need a username to sign in.');
+    const had = expandPermissions(employee.permissions);
+    let permissions = req.body?.permissions !== undefined ? permissionList(req.body.permissions) : had;
     if (role === 'super_admin') permissions = [];
     if (role !== employee.role && req.body?.permissions === undefined) permissions = role === 'admin' ? ADMIN_DEFAULT_PERMISSIONS.filter((p) => req.user.role === 'super_admin' || req.user.permissions.includes(p)) : role === 'user' ? [] : permissions;
+    const permissionsChanged = !sameSet(permissions, had);
     const isSuper = req.user.role === 'super_admin';
     if ((employee.role === 'super_admin' || role === 'super_admin') && !isSuper) throw superOnly();
-    if (employee.id === req.user.id) {
-      if (active === false) throw fail(400, 'SELF_SUSPEND', 'You cannot suspend your own account.');
-      if (!isSuper && (role !== employee.role || permissions.length !== employee.permissions.length || permissions.some((p) => !employee.permissions.includes(p)))) throw superOnly();
-    }
-    assertGrantable(req.user, permissions.filter((permission) => !employee.permissions.includes(permission)));
     let customRoleId = employee.custom_role_id;
-    if (req.body?.customRoleId !== undefined && (req.body.customRoleId || null) !== (employee.custom_role_id || null)) {
-      const template = await roleTemplate(db, req.body.customRoleId);
-      if (employee.id === req.user.id && !isSuper) throw superOnly();
-      if (template) assertGrantable(req.user, template.permissions);
+    let template = null;
+    const roleChanging = req.body?.customRoleId !== undefined && (req.body.customRoleId || null) !== (employee.custom_role_id || null);
+    if (roleChanging) {
+      template = await roleTemplate(db, req.body.customRoleId);
       customRoleId = template?.id ?? null;
     }
+    // Who may change what: names, teams, usernames and suspension are "edit"; roles and permissions are "change roles".
     const joinedOn = joinedDate(req.body?.joinedOn);
+    const editing = name !== employee.name || team !== employee.team || active !== employee.active || nextUsername !== employee.username || (joinedOn !== undefined && joinedOn !== null && joinedOn !== employee.joined_text);
+    const changingRoles = role !== employee.role || permissionsChanged || roleChanging;
+    if (editing && !req.user.permissions.includes('users.edit')) throw fail(403, 'PERMISSION_REQUIRED', 'You need the “Edit people” permission for this.');
+    if (changingRoles && !req.user.permissions.includes('users.change_roles')) throw fail(403, 'PERMISSION_REQUIRED', 'You need the “Change roles and permissions” permission for this.');
+    if (employee.id === req.user.id) {
+      if (active === false) throw fail(400, 'SELF_SUSPEND', 'You cannot suspend your own account.');
+      if (!isSuper && changingRoles) throw superOnly();
+    }
+    assertGrantable(req.user, permissions.filter((permission) => !had.includes(permission)));
+    if (template) assertGrantable(req.user, template.permissions);
+    if (nextUsername && nextUsername !== employee.username && (await db.query('SELECT 1 FROM employees WHERE lower(username) = lower($1) AND id <> $2', [nextUsername, employee.id])).rows[0]) throw fail(409, 'USERNAME_IN_USE', 'Someone already has that username.');
     await db.tx(async (tx) => {
       if (employee.role === 'super_admin' && (role !== 'super_admin' || !active)) {
         const admins = (await tx.query("SELECT id FROM employees WHERE role = 'super_admin' AND active = TRUE FOR UPDATE")).rows;
         if (admins.filter((admin) => admin.id !== employee.id).length < 1) throw fail(409, 'LAST_SUPER_ADMIN', 'At least one active super admin must remain.');
       }
-      await tx.query('UPDATE employees SET name=$2, team=$3, role=$4, permissions=$5, active=$6, custom_role_id=$7, joined_on=COALESCE($8::date, joined_on) WHERE id=$1', [employee.id, name, team, role, permissions, active, customRoleId, joinedOn === undefined ? null : joinedOn]);
+      await tx.query('UPDATE employees SET name=$2, team=$3, role=$4, permissions=$5, active=$6, custom_role_id=$7, joined_on=COALESCE($8::date, joined_on), username=$9 WHERE id=$1', [employee.id, name, team, role, permissionsChanged || role !== employee.role ? permissions : employee.permissions, active, customRoleId, joinedOn === undefined ? null : joinedOn, nextUsername]);
       if (!active || role !== employee.role) await tx.query('DELETE FROM sessions WHERE employee_id = $1', [employee.id]);
-      await audit(tx, req.user.id, 'user.updated', employee.id, `${role}${active ? '' : ', suspended'}`);
+      await audit(tx, req.user.id, 'user.updated', employee.id, `${role}${active ? '' : ', suspended'}${permissionsChanged ? ', permissions changed' : ''}${roleChanging ? ', role template changed' : ''}`);
     });
     res.status(204).end();
   });
 
-  app.post('/api/admin/users/:id/reset-password', requirePermission('users.manage'), requireCsrf, async (req, res) => {
+  app.post('/api/admin/users/:id/reset-password', requirePermission('users.reset_password'), requireCsrf, async (req, res) => {
     const employee = (await db.query('SELECT id, role FROM employees WHERE id = $1', [req.params.id])).rows[0];
     if (!employee) throw fail(404, 'EMPLOYEE_NOT_FOUND', 'This person no longer exists.');
     if (employee.role === 'super_admin' && req.user.role !== 'super_admin') throw superOnly();
@@ -923,7 +961,7 @@ export function createApp(db, options = {}) {
     return { from, to };
   };
 
-  app.get('/api/admin/audit/export', requirePermission('users.manage'), async (req, res) => {
+  app.get('/api/admin/audit/export', requirePermission('users.audit'), async (req, res) => {
     const { from, to } = rangeFilter(req.query);
     const { rows } = await db.query(`
       SELECT a.created_at, e.name AS actor, e.email, a.action, a.detail, a.entity_id
@@ -933,7 +971,7 @@ export function createApp(db, options = {}) {
     sendCsv(res, 'activity-log.csv', ['Time (UTC)', 'Who', 'Email', 'Action', 'Detail', 'Item id'], rows.map((r) => [r.created_at, r.actor ?? 'System', r.email ?? '', r.action, r.detail, r.entity_id ?? '']));
   });
 
-  app.get('/api/admin/bookings/export', requirePermission('bookings.manage'), async (req, res) => {
+  app.get('/api/admin/bookings/export', requirePermission('bookings.view_all'), async (req, res) => {
     const { from, to } = rangeFilter(req.query);
     const { rows } = await db.query(`
       SELECT b.starts_at, b.ends_at, b.status, r.label, r.type, e.name, e.email, e.team
@@ -943,7 +981,7 @@ export function createApp(db, options = {}) {
     sendCsv(res, 'bookings.csv', ['Starts (UTC)', 'Ends (UTC)', 'Status', 'Space', 'Type', 'Person', 'Email', 'Team'], rows.map((r) => [r.starts_at, r.ends_at, r.status, r.label, r.type, r.name, r.email, r.team]));
   });
 
-  app.get('/api/admin/audit', requirePermission('users.manage'), async (_req, res) => {
+  app.get('/api/admin/audit', requirePermission('users.audit'), async (_req, res) => {
     const { rows } = await db.query(`
       SELECT a.id, a.action, a.entity_id, a.detail, a.created_at, e.name AS actor_name
       FROM audit_log a LEFT JOIN employees e ON e.id = a.actor_id ORDER BY a.created_at DESC LIMIT 100`);
@@ -996,14 +1034,14 @@ export function createApp(db, options = {}) {
     res.json({ ok: true });
   });
 
-  const features = registerFeatures({ app, db, requireAuth, requireSignedIn, requireCsrf, requirePermission, requireAnyPermissions, audit, fail, text, limit, isoDate, userView });
+  const features = registerFeatures({ app, db, requireAuth, requireSignedIn, requireCsrf, requirePermission, requireAnyPermissions, audit, fail, text, limit, isoDate, userView, sendCsv, options });
   readSettings = features.readSettings;
 
   // Everything the app needs right after sign-in, in one request. The ETag makes repeat calls a cheap 304.
   app.get('/api/bootstrap', requireAuth, async (req, res) => {
-    const [config, teams, map, summary] = await Promise.all([features.readConfig(), loadTeams(), loadMapInfo(), loadSummary(req.user)]);
+    const [config, teams, map, summary, unread] = await Promise.all([features.readConfig(), loadTeams(), loadMapInfo(), loadSummary(req.user), features.notifier.unreadCount(req.user.id)]);
     res.set('Cache-Control', 'private, no-cache');
-    res.json({ configVersion: req.configVersion, user: req.user, config, ...teams, map, summary });
+    res.json({ configVersion: req.configVersion, user: req.user, config, ...teams, map, summary, unread });
   });
 
   app.use('/api', (_req, _res, next) => next(fail(404, 'NOT_FOUND', 'This API route does not exist.')));

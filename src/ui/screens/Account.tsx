@@ -2,8 +2,10 @@
 import { AVATARS, type User } from '../../lib/types';
 import { api, messageOf } from '../../lib/api';
 import { applyTheme, getAccentChoice, getMode, setAccentChoice, setMode, type ThemeMode } from '../../lib/theme';
+import { summarize } from '../../lib/permissions';
 import type { Ctx } from '../App';
 import { Avatar, Field, Icon, Switch, useKit } from '../kit';
+import { NotificationPrefs } from './NotificationPrefs';
 
 interface Props { ctx?: Ctx; user?: User; forced?: boolean; onChanged: () => void; onSignOut: () => void }
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -110,13 +112,15 @@ export function AccountScreen({ ctx, user: userProp, forced = false, onChanged, 
           <section className="panel">
             <h2>Your profile</h2>
             <dl className="facts">
-              <div><dt>Email</dt><dd>{user.email}</dd></div>
+              <div><dt>{user.email ? 'Email' : 'Username'}</dt><dd>{user.email || user.username || '—'}</dd></div>
+              {user.email && user.username && <div><dt>Username</dt><dd>{user.username}</dd></div>}
               <div><dt>Team</dt><dd>{user.team || '—'}</dd></div>
               <div><dt>Role</dt><dd>{user.role === 'super_admin' ? 'Super admin' : user.roleName ?? (user.role === 'admin' ? 'Admin' : 'Employee')}</dd></div>
-              {user.permissions.length > 0 && <div><dt>Can</dt><dd>{user.permissions.map((permission) => permission.replace('.manage', '').replace('.view', '')).join(', ')}</dd></div>}
+              {user.permissions.length > 0 && <div><dt>Can</dt><dd>{user.role === 'super_admin' ? 'Everything' : summarize(ctx.config.permissionCatalog, user.permissions).map((line) => line.group).join(', ')}</dd></div>}
             </dl>
             <button className="button" onClick={onSignOut}><Icon name="logout" size={18} /> Sign out</button>
           </section>
+          <NotificationPrefs ctx={ctx} />
           {form}
         </div>
       </div>

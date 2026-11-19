@@ -14,7 +14,9 @@ export function EventsScreen({ ctx }: { ctx: Ctx }) {
   const [editing, setEditing] = useState<OfficeEvent | 'new' | null>(null);
   const [deleting, setDeleting] = useState<OfficeEvent | null>(null);
   const [filter, setFilter] = useState('All');
-  const canManage = ctx.user.permissions.includes('events.manage');
+  const canCreate = ctx.user.permissions.includes('events.create');
+  const canEdit = ctx.user.permissions.includes('events.edit');
+  const canDelete = ctx.user.permissions.includes('events.delete');
   const rsvpOn = ctx.config.options.eventsRsvpEnabled;
 
   const load = useCallback(async () => {
@@ -41,13 +43,13 @@ export function EventsScreen({ ctx }: { ctx: Ctx }) {
     <div>
       <div className="page-head">
         <div><span className="eyebrow">COMMUNITY</span><h1>What’s happening</h1></div>
-        {canManage && <button className="button button-primary" onClick={() => setEditing('new')}><Icon name="plus" size={18} /> Create event</button>}
+        {canCreate && <button className="button button-primary" onClick={() => setEditing('new')}><Icon name="plus" size={18} /> Create event</button>}
       </div>
       <div className="chip-row" role="group" aria-label="Filter events">
         {['All', ...EVENT_CATEGORIES].map((category) => <button key={category} className={`chip ${filter === category ? 'on' : ''}`} onClick={() => setFilter(category)}>{category}</button>)}
       </div>
       {events === null ? <Spinner /> : shown.length === 0 ? (
-        <Empty icon="party" title="No events here yet">{canManage ? 'Be the first — create one and get people together.' : 'Check back soon, something fun is always brewing.'}</Empty>
+        <Empty icon="party" title="No events here yet">{canCreate ? 'Be the first — create one and get people together.' : 'Check back soon, something fun is always brewing.'}</Empty>
       ) : (
         <div className="event-grid">
           {shown.map((event) => (
@@ -71,10 +73,8 @@ export function EventsScreen({ ctx }: { ctx: Ctx }) {
                     <Icon name={event.going ? 'check' : 'heart'} size={18} /> {event.going ? 'You’re going' : 'I’m going'}
                   </button>
                 )}
-                {canManage && <>
-                  <button className="icon-button" aria-label={`Edit ${event.title}`} onClick={() => setEditing(event)}><Icon name="edit" /></button>
-                  <button className="icon-button danger" aria-label={`Delete ${event.title}`} onClick={() => setDeleting(event)}><Icon name="trash" /></button>
-                </>}
+                {canEdit && <button className="icon-button" aria-label={`Edit ${event.title}`} onClick={() => setEditing(event)}><Icon name="edit" /></button>}
+                {canDelete && <button className="icon-button danger" aria-label={`Delete ${event.title}`} onClick={() => setDeleting(event)}><Icon name="trash" /></button>}
               </div>
             </article>
           ))}

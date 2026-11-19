@@ -1,27 +1,32 @@
 import { randomUUID } from 'node:crypto';
-import { ALL_PERMISSIONS, PERMISSIONS, safeUrl } from './security.js';
+import { ALL_PERMISSIONS, LEGACY_PERMISSIONS, RESERVED_PERMISSIONS, expandPermissions, permissionCatalog, safeUrl } from './security.js';
 import { DEFAULT_MENU_SETTINGS, REVIEW_VISIBILITY } from './menu-catalog.js';
 import { registerMenu } from './menu.js';
+import { registerNotifications, notificationCatalog, NOTIFICATION_TYPES } from './notifications.js';
+import { registerIssues } from './issues.js';
 
 export const FEATURE_KEYS = {
   links: 'Useful links (user guides, portals)',
   contacts: 'Important contacts',
   menu: 'Food menu',
   announcements: 'Announcements',
-  kudos: 'Kudos wall',
+  issues: 'Issue box (report a problem: coffee machine, tap, lights...)',
+  kudos: 'Kudos wall (optional)',
   polls: 'Quick polls',
   celebrations: 'Birthdays and work anniversaries',
-  feedback: 'Anonymous feedback box',
+  feedback: 'Idea box (ideas and suggestions)',
   whosin: 'Who is in today',
   vibes: 'Points, levels and badges',
 };
-export const DEFAULT_FEATURES = Object.fromEntries(Object.keys(FEATURE_KEYS).map((key) => [key, true]));
+// Kudos is optional and off for brand-new installs. Existing installs keep whatever they stored (see migration 006).
+export const DEFAULT_FEATURES = { ...Object.fromEntries(Object.keys(FEATURE_KEYS).map((key) => [key, true])), kudos: false };
 // Extra on/off options (super admin). Stored together under the "options" settings key.
 export const OPTION_KEYS = {
   showBookerNames: 'Show who booked a seat or room in availability details',
   eventsRsvpEnabled: 'Let people tap “I’m going” on events',
+  issuePhotosEnabled: 'Let people attach one small photo to an issue report',
 };
-export const DEFAULT_OPTIONS = { showBookerNames: false, eventsRsvpEnabled: true };
+export const DEFAULT_OPTIONS = { showBookerNames: false, eventsRsvpEnabled: true, issuePhotosEnabled: true };
 export const ACCENTS = ['green', 'ocean', 'sunset', 'berry', 'mono'];
 export const DEFAULT_BRANDING = { appName: 'GCC Connect', tagline: 'Your office day, sorted.', accent: 'green', welcome: '' };
 export const KUDOS_BADGES = ['star', 'team', 'idea', 'fire', 'helper', 'coffee'];
@@ -44,7 +49,7 @@ export const LEVELS = [
   { name: 'Legend', min: 700, emoji: '👑' },
 ];
 
-export function registerFeatures({ app, db, requireAuth, requireSignedIn, requireCsrf, requirePermission, requireAnyPermissions, audit, fail, text, limit, userView }) {
+export function registerFeatures({ app, db, requireAuth, requireSignedIn, requireCsrf, requirePermission, requireAnyPermissions, audit, fail, text, limit, userView, sendCsv, options = {} }) {
   const requireSuper = (req, _res, next) => {
     if (!req.user) return next(fail(401, 'AUTH_REQUIRED', 'Sign in to continue.'));
     return req.user.role === 'super_admin' ? next() : next(fail(403, 'SUPER_ADMIN_REQUIRED', 'Only a super admin can do that.'));
@@ -69,9 +74,12 @@ export function registerFeatures({ app, db, requireAuth, requireSignedIn, requir
       ...menuSettings(stored.menu_settings),
     };
   }
-  const readConfig = async () => ({ ...(await readSettings()), featureCatalog: FEATURE_KEYS, optionCatalog: OPTION_KEYS, accents: ACCENTS });
+  const readConfig = async () => ({
+    ...(await readSettings()), featureCatalog: FEATURE_KEYS, optionCatalog: OPTION_KEYS, accents: ACCENTS,
+    permissionCatalog: permissionCatalog(), notificationCatalog: notificationCatalog(),
+  });
   // Managers can still read the area they run while it is switched off (GET with ?manage=1) so they can prepare content.
-  const MANAGE_BYPASS = { links: 'content.manage', contacts: 'content.manage', announcements: 'content.manage', menu: 'menu.manage', polls: 'community.manage' };
+  const MANAGE_BYPASS = { links: 'content.links', contacts: 'content.contacts', announcements: 'content.announcements', menu: 'menu.edit', polls: 'community.polls', issues: 'issues.manage_categories' };
   const feature = (name) => async (req, _res, next) => {
     try {
       if (req.method === 'GET' && req.query.manage === '1' && MANAGE_BYPASS[name] && req.user?.permissions.includes(MANAGE_BYPASS[name])) return next();
@@ -164,7 +172,7 @@ export function registerFeatures({ app, db, requireAuth, requireSignedIn, requir
          birth_month = CASE WHEN $4::boolean THEN $5::int ELSE birth_month END, birth_day = CASE WHEN $4::boolean THEN $6::int ELSE birth_day END WHERE id = $1`,
       [req.user.id, avatar ?? null, body.showInWhosin ?? null, month !== undefined, month ?? null, day ?? null],
     );
-    const { rows } = await db.query(`SELECT e.*, COALESCE(cr.permissions, '{}') AS role_permissions, cr.name AS role_name FROM employees e LEFT JOIN custom_roles cr ON cr.id = e.custom_role_id WHERE e.id = $1`, [req.user.id]);
+    const { rows } = await db.query(`SELECT e.*, COALESCE(cr.permissions, '{}') AS role_permissions, cr.name AS role_name, cr.simple_ui, cr.landing FROM employees e LEFT JOIN custom_roles cr ON cr.id = e.custom_role_id WHERE e.id = $1`, [req.user.id]);
     res.json({ user: userView(rows[0]) });
   });
 
@@ -200,19 +208,19 @@ export function registerFeatures({ app, db, requireAuth, requireSignedIn, requir
     const { rows } = await db.query('SELECT id, title, url, description, category, emoji, sort_order FROM links ORDER BY category, sort_order, title LIMIT 300');
     res.json({ links: rows });
   });
-  app.post('/api/admin/links', requirePermission('content.manage'), requireCsrf, async (req, res) => {
+  app.post('/api/admin/links', requirePermission('content.links'), requireCsrf, async (req, res) => {
     const id = id8('link');
     const [sql, params] = insertRow('links', { id, ...linkBody(req.body, false) });
     await db.tx(async (tx) => { await tx.query(sql, params); await audit(tx, req.user.id, 'link.created', id, req.body.title); });
     res.status(201).json({ id });
   });
-  app.patch('/api/admin/links/:id', requirePermission('content.manage'), requireCsrf, async (req, res) => {
+  app.patch('/api/admin/links/:id', requirePermission('content.links'), requireCsrf, async (req, res) => {
     const [sql, params] = updateRow('links', req.params.id, linkBody(req.body, true));
     const result = await db.query(`${sql} RETURNING id`, params);
     if (!result.rows.length) throw fail(404, 'NOT_FOUND', 'That link no longer exists.');
     res.status(204).end();
   });
-  app.delete('/api/admin/links/:id', requirePermission('content.manage'), requireCsrf, async (req, res) => {
+  app.delete('/api/admin/links/:id', requirePermission('content.links'), requireCsrf, async (req, res) => {
     const result = await db.query('DELETE FROM links WHERE id = $1 RETURNING title', [req.params.id]);
     if (!result.rows.length) throw fail(404, 'NOT_FOUND', 'That link no longer exists.');
     await audit(db, req.user.id, 'link.deleted', req.params.id, result.rows[0].title);
@@ -238,19 +246,19 @@ export function registerFeatures({ app, db, requireAuth, requireSignedIn, requir
     const { rows } = await db.query('SELECT id, name, role_title, category, phone, email, hours, notes, emoji, sort_order FROM contacts ORDER BY category, sort_order, name LIMIT 300');
     res.json({ contacts: rows });
   });
-  app.post('/api/admin/contacts', requirePermission('content.manage'), requireCsrf, async (req, res) => {
+  app.post('/api/admin/contacts', requirePermission('content.contacts'), requireCsrf, async (req, res) => {
     const id = id8('contact');
     const [sql, params] = insertRow('contacts', { id, ...contactBody(req.body, false) });
     await db.tx(async (tx) => { await tx.query(sql, params); await audit(tx, req.user.id, 'contact.created', id, req.body.name); });
     res.status(201).json({ id });
   });
-  app.patch('/api/admin/contacts/:id', requirePermission('content.manage'), requireCsrf, async (req, res) => {
+  app.patch('/api/admin/contacts/:id', requirePermission('content.contacts'), requireCsrf, async (req, res) => {
     const [sql, params] = updateRow('contacts', req.params.id, contactBody(req.body, true));
     const result = await db.query(`${sql} RETURNING id`, params);
     if (!result.rows.length) throw fail(404, 'NOT_FOUND', 'That contact no longer exists.');
     res.status(204).end();
   });
-  app.delete('/api/admin/contacts/:id', requirePermission('content.manage'), requireCsrf, async (req, res) => {
+  app.delete('/api/admin/contacts/:id', requirePermission('content.contacts'), requireCsrf, async (req, res) => {
     const result = await db.query('DELETE FROM contacts WHERE id = $1 RETURNING name', [req.params.id]);
     if (!result.rows.length) throw fail(404, 'NOT_FOUND', 'That contact no longer exists.');
     await audit(db, req.user.id, 'contact.deleted', req.params.id, result.rows[0].name);
@@ -259,6 +267,8 @@ export function registerFeatures({ app, db, requireAuth, requireSignedIn, requir
 
   // ---------- Food menu (see menu.js) ----------
   const menu = registerMenu({ app, db, requireAuth, requireCsrf, requirePermission, requireAnyPermissions, audit, fail, text, limit, feature, readSettings, id8, validDate, dateKey, addDays });
+  const notifier = registerNotifications({ app, db, requireAuth, requireCsrf, fail, limit, readSettings });
+  registerIssues({ app, db, requireAuth, requireCsrf, requireAnyPermissions, requirePermission, audit, fail, text, limit, feature, readSettings, id8, notifier, sendCsv, options });
 
   // ---------- Announcements ----------
   const announcementBody = (body, partial) => {
@@ -278,24 +288,28 @@ export function registerFeatures({ app, db, requireAuth, requireSignedIn, requir
     return out;
   };
   app.get('/api/announcements', requireAuth, feature('announcements'), async (req, res) => {
-    const all = req.query.all === '1' && req.user.permissions.includes('content.manage');
+    const all = req.query.all === '1' && req.user.permissions.includes('content.announcements');
     const { rows } = await db.query(`SELECT id, title, body, emoji, pinned, expires_at, created_at FROM announcements
       ${all ? '' : 'WHERE expires_at IS NULL OR expires_at > now()'} ORDER BY pinned DESC, created_at DESC LIMIT 30`);
     res.json({ announcements: rows });
   });
-  app.post('/api/admin/announcements', requirePermission('content.manage'), requireCsrf, async (req, res) => {
+  app.post('/api/admin/announcements', requirePermission('content.announcements'), requireCsrf, async (req, res) => {
     const id = id8('news');
     const [sql, params] = insertRow('announcements', { id, ...announcementBody(req.body, false), created_by: req.user.id });
     await db.tx(async (tx) => { await tx.query(sql, params); await audit(tx, req.user.id, 'announcement.created', id, req.body.title); });
+    // Opt-in: the author ticks "notify everyone"; one INSERT reaches everybody who has not switched announcements off.
+    if (req.body?.notify === true) {
+      try { await notifier.broadcast(db, { type: 'announcement', title: `${req.body.emoji || '📣'} ${req.body.title}`, body: req.body.body ?? '', link: 'announcements', exceptId: req.user.id }); } catch (error) { console.error('Announcement notification failed:', error.message); }
+    }
     res.status(201).json({ id });
   });
-  app.patch('/api/admin/announcements/:id', requirePermission('content.manage'), requireCsrf, async (req, res) => {
+  app.patch('/api/admin/announcements/:id', requirePermission('content.announcements'), requireCsrf, async (req, res) => {
     const [sql, params] = updateRow('announcements', req.params.id, announcementBody(req.body, true));
     const result = await db.query(`${sql} RETURNING id`, params);
     if (!result.rows.length) throw fail(404, 'NOT_FOUND', 'That announcement no longer exists.');
     res.status(204).end();
   });
-  app.delete('/api/admin/announcements/:id', requirePermission('content.manage'), requireCsrf, async (req, res) => {
+  app.delete('/api/admin/announcements/:id', requirePermission('content.announcements'), requireCsrf, async (req, res) => {
     const result = await db.query('DELETE FROM announcements WHERE id = $1 RETURNING id', [req.params.id]);
     if (!result.rows.length) throw fail(404, 'NOT_FOUND', 'That announcement no longer exists.');
     res.status(204).end();
@@ -334,7 +348,7 @@ export function registerFeatures({ app, db, requireAuth, requireSignedIn, requir
   app.delete('/api/kudos/:id', requireAuth, requireCsrf, async (req, res) => {
     const kudos = (await db.query('SELECT id, from_id FROM kudos WHERE id = $1', [req.params.id])).rows[0];
     if (!kudos) throw fail(404, 'NOT_FOUND', 'That shout-out is gone.');
-    if (kudos.from_id !== req.user.id && !req.user.permissions.includes('community.manage')) throw fail(403, 'NOT_OWNER', 'You can only remove your own shout-outs.');
+    if (kudos.from_id !== req.user.id && !req.user.permissions.includes('community.moderation')) throw fail(403, 'NOT_OWNER', 'You can only remove your own shout-outs.');
     await db.query('DELETE FROM kudos WHERE id = $1', [kudos.id]);
     res.status(204).end();
   });
@@ -363,7 +377,7 @@ export function registerFeatures({ app, db, requireAuth, requireSignedIn, requir
     await db.query('INSERT INTO poll_votes (poll_id, employee_id, option_index) VALUES ($1,$2,$3) ON CONFLICT (poll_id, employee_id) DO UPDATE SET option_index = excluded.option_index', [poll.id, req.user.id, option]);
     res.status(204).end();
   });
-  app.post('/api/admin/polls', requirePermission('community.manage'), requireCsrf, async (req, res) => {
+  app.post('/api/admin/polls', requirePermission('community.polls'), requireCsrf, async (req, res) => {
     const question = text(req.body?.question, 160, { required: true, label: 'Question' });
     const options = req.body?.options;
     if (!Array.isArray(options) || options.length < 2 || options.length > 6) throw fail(400, 'INVALID_OPTIONS', 'Give between 2 and 6 options.');
@@ -381,12 +395,12 @@ export function registerFeatures({ app, db, requireAuth, requireSignedIn, requir
     });
     res.status(201).json({ id });
   });
-  app.post('/api/admin/polls/:id/close', requirePermission('community.manage'), requireCsrf, async (req, res) => {
+  app.post('/api/admin/polls/:id/close', requirePermission('community.polls'), requireCsrf, async (req, res) => {
     const result = await db.query('UPDATE polls SET closed = TRUE WHERE id = $1 RETURNING id', [req.params.id]);
     if (!result.rows.length) throw fail(404, 'NOT_FOUND', 'That poll is gone.');
     res.status(204).end();
   });
-  app.delete('/api/admin/polls/:id', requirePermission('community.manage'), requireCsrf, async (req, res) => {
+  app.delete('/api/admin/polls/:id', requirePermission('community.polls'), requireCsrf, async (req, res) => {
     const result = await db.query('DELETE FROM polls WHERE id = $1 RETURNING id', [req.params.id]);
     if (!result.rows.length) throw fail(404, 'NOT_FOUND', 'That poll is gone.');
     res.status(204).end();
@@ -425,23 +439,24 @@ export function registerFeatures({ app, db, requireAuth, requireSignedIn, requir
   app.post('/api/feedback', requireAuth, feature('feedback'), requireCsrf, async (req, res) => {
     if (!limit(`feedback:${req.user.id}`, 5, 60 * 60_000)) throw fail(429, 'RATE_LIMITED', 'Thanks for the enthusiasm! Please wait a bit before sending more.');
     const message = text(req.body?.message, 1000, { required: true, label: 'Message' });
-    const category = ['Idea', 'Issue', 'Kudos', 'Other'].includes(req.body?.category) ? req.body.category : 'Idea';
+    const category = ['Idea', 'Suggestion', 'Other'].includes(req.body?.category) ? req.body.category : 'Idea';
     const anonymous = req.body?.anonymous !== false;
     await db.query('INSERT INTO feedback (id, employee_id, category, message) VALUES ($1,$2,$3,$4)', [id8('fb'), anonymous ? null : req.user.id, category, message]);
+    try { await notifier.deliverToStaff(db, { type: 'idea_new', title: `New ${category.toLowerCase()} in the idea box`, body: message.slice(0, 140), link: 'ideas', exceptId: anonymous ? null : req.user.id }); } catch (error) { console.error('Idea notification failed:', error.message); }
     res.status(201).json({ ok: true });
   });
-  app.get('/api/admin/feedback', requirePermission('community.manage'), async (_req, res) => {
+  app.get('/api/admin/feedback', requirePermission('community.ideas'), async (_req, res) => {
     const { rows } = await db.query(`SELECT f.id, f.category, f.message, f.status, f.created_at, e.name AS from_name FROM feedback f LEFT JOIN employees e ON e.id = f.employee_id
       ORDER BY (f.status = 'done'), f.created_at DESC LIMIT 200`);
     res.json({ feedback: rows });
   });
-  app.patch('/api/admin/feedback/:id', requirePermission('community.manage'), requireCsrf, async (req, res) => {
+  app.patch('/api/admin/feedback/:id', requirePermission('community.ideas'), requireCsrf, async (req, res) => {
     if (!['new', 'seen', 'done'].includes(req.body?.status)) throw fail(400, 'INVALID_STATUS', 'Choose new, seen or done.');
     const result = await db.query('UPDATE feedback SET status = $2 WHERE id = $1 RETURNING id', [req.params.id, req.body.status]);
     if (!result.rows.length) throw fail(404, 'NOT_FOUND', 'That note is gone.');
     res.status(204).end();
   });
-  app.delete('/api/admin/feedback/:id', requirePermission('community.manage'), requireCsrf, async (req, res) => {
+  app.delete('/api/admin/feedback/:id', requirePermission('community.ideas'), requireCsrf, async (req, res) => {
     await db.query('DELETE FROM feedback WHERE id = $1', [req.params.id]);
     res.status(204).end();
   });
@@ -559,14 +574,47 @@ export function registerFeatures({ app, db, requireAuth, requireSignedIn, requir
     if (emoji !== undefined) out.emoji = emoji || '⭐';
     if (body?.permissions !== undefined || !partial) {
       const list = body?.permissions;
-      if (!Array.isArray(list) || list.some((p) => !ALL_PERMISSIONS.includes(p))) throw fail(400, 'INVALID_PERMISSIONS', 'Choose permissions from the list.');
-      out.permissions = [...new Set(list)];
+      if (!Array.isArray(list) || list.length > 100 || list.some((p) => typeof p !== 'string' || (!ALL_PERMISSIONS.includes(p) && !LEGACY_PERMISSIONS[p]))) throw fail(400, 'INVALID_PERMISSIONS', 'Choose permissions from the list.');
+      if (list.some((p) => RESERVED_PERMISSIONS.includes(p))) throw fail(400, 'INVALID_PERMISSIONS', 'Settings and role management belong to the super admin role and cannot be given to others.');
+      out.permissions = expandPermissions(list);
+    }
+    if (body?.simpleUi !== undefined) {
+      if (typeof body.simpleUi !== 'boolean') throw fail(400, 'INVALID_INPUT', 'Simple home must be on or off.');
+      out.simple_ui = body.simpleUi;
+    }
+    if (body?.landing !== undefined) {
+      if (!['', 'tasks'].includes(body.landing)) throw fail(400, 'INVALID_INPUT', 'Choose a landing screen from the list.');
+      out.landing = body.landing;
+    }
+    if (body?.notifyDefaults !== undefined) {
+      const input = body.notifyDefaults;
+      if (typeof input !== 'object' || input === null || Array.isArray(input)) throw fail(400, 'INVALID_INPUT', 'Default notifications could not be read.');
+      const clean = { types: {}, categories: [] };
+      for (const [id, channels] of Object.entries(input.types ?? {})) {
+        if (!NOTIFICATION_TYPES[id] || typeof channels !== 'object' || channels === null) throw fail(400, 'INVALID_INPUT', 'Choose notification types from the list.');
+        const entry = {};
+        for (const channel of ['inapp', 'push']) if (channels[channel] !== undefined) {
+          if (typeof channels[channel] !== 'boolean') throw fail(400, 'INVALID_INPUT', 'Each notification choice must be on or off.');
+          entry[channel] = channels[channel];
+        }
+        clean.types[id] = entry;
+      }
+      if (input.categories !== undefined) {
+        if (!Array.isArray(input.categories) || input.categories.length > 60 || input.categories.some((c) => typeof c !== 'string' || c.length > 64)) throw fail(400, 'INVALID_INPUT', 'Choose issue categories from the list.');
+        clean.categories = [...new Set(input.categories)];
+      }
+      out.notify_defaults = JSON.stringify(clean);
     }
     return out;
   };
+  const roleView = (row) => ({
+    id: row.id, name: row.name, description: row.description, emoji: row.emoji, permissions: expandPermissions(row.permissions), people: row.people,
+    systemKey: row.system_key, simpleUi: row.simple_ui, landing: row.landing, notifyDefaults: row.notify_defaults,
+  });
   app.get('/api/admin/roles', requireSuper, async (_req, res) => {
-    const { rows } = await db.query(`SELECT r.id, r.name, r.description, r.emoji, r.permissions, (SELECT COUNT(*)::int FROM employees e WHERE e.custom_role_id = r.id) AS people FROM custom_roles r ORDER BY r.name`);
-    res.json({ roles: rows, permissionCatalog: PERMISSIONS });
+    const { rows } = await db.query(`SELECT r.id, r.name, r.description, r.emoji, r.permissions, r.system_key, r.simple_ui, r.landing, r.notify_defaults,
+      (SELECT COUNT(*)::int FROM employees e WHERE e.custom_role_id = r.id) AS people FROM custom_roles r ORDER BY (r.system_key IS NULL), r.name`);
+    res.json({ roles: rows.map(roleView) });
   });
   app.post('/api/admin/roles', requireSuper, requireCsrf, async (req, res) => {
     const body = roleBody(req.body, false);
@@ -586,11 +634,14 @@ export function registerFeatures({ app, db, requireAuth, requireSignedIn, requir
     res.status(204).end();
   });
   app.delete('/api/admin/roles/:id', requireSuper, requireCsrf, async (req, res) => {
-    const result = await db.query('DELETE FROM custom_roles WHERE id = $1 RETURNING name', [req.params.id]);
-    if (!result.rows.length) throw fail(404, 'NOT_FOUND', 'That role no longer exists.');
-    await audit(db, req.user.id, 'role.deleted', req.params.id, result.rows[0].name);
+    const role = (await db.query('SELECT name, system_key, (SELECT COUNT(*)::int FROM employees e WHERE e.custom_role_id = custom_roles.id) AS people FROM custom_roles WHERE id = $1', [req.params.id])).rows[0];
+    if (!role) throw fail(404, 'NOT_FOUND', 'That role no longer exists.');
+    if (role.system_key) throw fail(409, 'ROLE_SYSTEM', 'Built-in roles can be edited but not deleted.');
+    if (role.people > 0) throw fail(409, 'ROLE_IN_USE', `${role.people} ${role.people === 1 ? 'person has' : 'people have'} this role. Move them to another role first.`);
+    await db.query('DELETE FROM custom_roles WHERE id = $1', [req.params.id]);
+    await audit(db, req.user.id, 'role.deleted', req.params.id, role.name);
     res.status(204).end();
   });
 
-  return { readSettings, readConfig, menu };
+  return { readSettings, readConfig, menu, notifier };
 }

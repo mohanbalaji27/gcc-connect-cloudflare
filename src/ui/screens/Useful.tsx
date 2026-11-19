@@ -37,7 +37,7 @@ export function UsefulScreen({ ctx }: { ctx: Ctx }) {
         <div className="input-icon"><Icon name="search" size={18} /><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search…" aria-label="Search" maxLength={60} /></div>
       </div>
       {tabs.length > 1 && <Tabs tabs={tabs} value={tab} onChange={setTab} />}
-      {tab === 'links' && (links === null ? <Spinner /> : shownLinks.length === 0 ? <Empty icon="link" title="No links yet">{ctx.user.permissions.includes('content.manage') ? 'Add some in Manage → Content.' : 'Your admins can add user guides and portals here.'}</Empty> : (
+      {tab === 'links' && (links === null ? <Spinner /> : shownLinks.length === 0 ? <Empty icon="link" title="No links yet">{ctx.user.permissions.includes('content.links') || ctx.user.permissions.includes('content.contacts') ? 'Add some in Manage → Content.' : 'Your admins can add user guides and portals here.'}</Empty> : (
         groupBy(shownLinks, (l) => l.category).map(([category, items]) => (
           <section key={category} className="link-section">
             <h3 className="section-title">{category}</h3>

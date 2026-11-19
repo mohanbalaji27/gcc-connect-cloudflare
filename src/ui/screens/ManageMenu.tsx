@@ -7,7 +7,7 @@ import { MenuReviews } from './MenuReviews';
 // Food team workspace: the whole-day editor and the reviews view. Reading reviews has its own permission.
 export function ManageMenu({ ctx }: { ctx: Ctx }) {
   const can = (permission: string) => ctx.user.permissions.includes(permission as never);
-  const canEdit = can('menu.manage');
+  const canEdit = can('menu.edit');
   const canReviews = canEdit || can('menu.reviews.view');
   const tabs = [
     ...(canEdit ? [{ id: 'edit' as const, label: 'Edit menu', icon: 'edit' }] : []),

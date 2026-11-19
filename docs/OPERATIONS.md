@@ -35,7 +35,10 @@ Local development: `npm run db:reset` deletes `data/pglite`.
 - Keep one or two **super admins**; give everyone else only the permissions they need (Manage → People). The last active super admin cannot be demoted or suspended.
 - Suspending someone or changing their role ends all their sessions immediately.
 - Password reset gives a one-time temporary password and forces a change at next sign-in.
-- Manage → Activity shows who changed what (bookings, events, teams, spaces, users, QR codes).
+- Manage → Activity shows who changed what (bookings, events, teams, spaces, users, QR codes, issues, categories and routing).
+- Built-in role templates (Employee, Facility staff, Facility manager, ...) are seeded by migration 006. Edit them freely; they cannot be deleted. People without a work email sign in with a **username / employee ID** set under Manage → People.
+- **Issue box:** set the categories and who is told under Manage → Issue box. Facility managers (the *Facility manager* template) are always notified and escalated to; give the template to the right people. Photos can be switched off in Settings → Options. Issues, their timeline and photos are kept until a retention policy is agreed.
+- **Notifications** older than 30 days are deleted opportunistically (at most once a day, guarded by the `notifications_cleanup` row in `app_settings`).
 
 ## Time and retention
 

@@ -3,12 +3,16 @@ import type { IScannerControls } from '@zxing/browser';
 import type { Resource } from '../../lib/types';
 import { api, messageOf } from '../../lib/api';
 import type { Ctx, QrIntent } from '../App';
+import { nav } from '../../lib/nav';
 import { Empty, Icon, useKit } from '../kit';
 
 function parseQr(value: string): QrIntent | null {
   const trimmed = value.trim();
   try {
     const url = new URL(trimmed);
+    // A "report a problem" sticker carries ?report=<seat or room>.
+    const reportId = url.searchParams.get('report');
+    if (reportId) return { resourceId: reportId, report: true };
     const resourceId = url.searchParams.get('resource');
     if (!resourceId) return null;
     return { resourceId, token: url.searchParams.get('token') ?? undefined, stay: url.searchParams.get('stay') ?? undefined };
@@ -17,7 +21,9 @@ function parseQr(value: string): QrIntent | null {
   }
 }
 
-export function ScanScreen({ onResolved }: { ctx: Ctx; onResolved: (intent: QrIntent) => void }) {
+export function ScanScreen({ onResolved: deliver }: { ctx: Ctx; onResolved: (intent: QrIntent) => void }) {
+  // Coming from "Report a problem", whatever is scanned or picked opens the report form for that place.
+  const onResolved = (intent: QrIntent) => { const asReport = nav.scanMode === 'report'; nav.scanMode = ''; deliver(asReport ? { ...intent, report: true } : intent); };
   const { toast } = useKit();
   const video = useRef<HTMLVideoElement>(null);
   const controls = useRef<IScannerControls | null>(null);

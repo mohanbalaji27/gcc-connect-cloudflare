@@ -9,15 +9,15 @@ info:
 servers:
   - url: /api
 paths:
-  /login: { post: { summary: Sign in, security: [] } }
+  /login: { post: { summary: "Sign in with { login, password }. `login` is a work email or a username / employee ID (case-insensitive); `email` is still accepted for older clients. The same error answers an unknown name and a wrong password; attempts are rate limited per address", security: [] } }
   /logout: { post: { summary: Sign out } }
   /session: { get: { summary: Current user and CSRF token (user is null when signed out) } }
   /me/password: { post: { summary: Change own password (allowed while a temporary password is active) } }
-  /me/summary: { get: { summary: Streak, monthly visits and desks left today } }
-  /bootstrap: { get: { summary: "Everything the app needs after sign-in in one call: configVersion, user, config (features, branding, options), teams, map info (incl. floorPlanVersion) and the summary. Sends an ETag, so repeat calls are cheap 304s" } }
-  /pulse: { get: { summary: "Tiny heartbeat: { configVersion, serverTime }. configVersion goes up whenever settings, branding, teams, spaces or the map change; clients reload /bootstrap when it differs. Every API response also carries it in the X-Config-Version header. Later features add fields here" } }
-  /availability: { get: { summary: "Busy intervals for one office day (?date=YYYY-MM-DD, Asia/Kolkata): { date, showNames, busy: { spaceId: [[fromMinute, toMinute, mine(0|1), name?]] } }. Names only when the showBookerNames option is on or the caller has bookings.manage. ETag, private" } }
-  /health: { get: { summary: Liveness and database check, security: [] } }
+  /me/summary: { get: { summary: "Streak, monthly visits and desks left today" } }
+  /bootstrap: { get: { summary: "Everything the app needs after sign-in in one call: configVersion, user, config (features, branding, options, permissionCatalog, notificationCatalog), teams, map info (incl. floorPlanVersion), the summary and the unread notification count. Sends an ETag, so repeat calls are cheap 304s" } }
+  /pulse: { get: { summary: "Tiny heartbeat: { configVersion, serverTime, notifications: { unread } }. configVersion goes up whenever settings, branding, teams, spaces or the map change; clients reload /bootstrap when it differs. Every API response also carries it in the X-Config-Version header. Features add fields here through app.locals.pulse.add(name, fn); the bell count rides on it, so it costs no extra call" } }
+  /availability: { get: { summary: "Busy intervals for one office day (?date=YYYY-MM-DD, Asia/Kolkata): { date, showNames, busy: { spaceId: [[fromMinute, toMinute, mine(0|1), name?]] } }. Names only when the showBookerNames option is on or the caller has bookings.view_all. ETag, private" } }
+  /health: { get: { summary: "Liveness and database check, security: []" } }
   /resources:
     get:
       summary: Search active desks and rooms
@@ -29,11 +29,11 @@ paths:
   /resources/{id}: { get: { summary: One active space } }
   /teams: { get: { summary: Teams with seat counts } }
   /map: { get: { summary: Layout calibration and whether a floor plan exists } }
-  /floor-plan: { get: { summary: Floor plan PDF (signed-in users only, no-store) } }
+  /floor-plan: { get: { summary: "Floor plan PDF (signed-in users only, no-store)" } }
   /bookings:
     get: { summary: My upcoming bookings }
     post: { summary: Create a booking (requires Idempotency-Key; optional QR token) }
-  /bookings/{id}: { delete: { summary: Cancel (owner, or bookings.manage). Bookings that already ended answer 409 BOOKING_ENDED } }
+  /bookings/{id}: { delete: { summary: "Cancel (owner, or bookings.cancel_others). Bookings that already ended answer 409 BOOKING_ENDED" } }
   /events:
     get: { summary: Upcoming events with RSVP counts }
     post: { summary: Create an event (events.manage) }
@@ -43,12 +43,12 @@ paths:
   /events/{id}/rsvp:
     put: { summary: I'm going }
     delete: { summary: Not going }
-  /admin/bookings: { get: { summary: All upcoming bookings (bookings.manage) } }
+  /admin/bookings: { get: { summary: All upcoming bookings (bookings.view_all) } }
   /admin/tokens:
     get: { summary: Recent booking codes (qr.manage) }
     post: { summary: "Create a booking code; noExpiry:true or expiresAt; maxRedemptions null = unlimited (qr.manage)" }
   /admin/tokens/{id}: { delete: { summary: Revoke a booking code (qr.manage) } }
-  /admin/employee-options: { get: { summary: People list for restricting a code (qr.manage or users.manage) } }
+  /admin/employee-options: { get: { summary: "People list for pickers (qr.manage, users.view, users.create, issues.assign or notifications.route)" } }
   /admin/resources:
     get: { summary: All spaces including retired (spaces.manage) }
     post: { summary: Add a desk or room (spaces.manage) }
@@ -56,7 +56,7 @@ paths:
     patch: { summary: Edit, move (x/y percent), or reactivate (spaces.manage) }
     delete: { summary: Retire and cancel upcoming bookings (spaces.manage) }
   /admin/map/calibration: { put: { summary: Re-lay out seats from the workbook grid (spaces.manage) } }
-  /admin/floor-plan: { put: { summary: Upload the floor-plan PDF, content-type application/pdf, 25 MB max (spaces.manage) } }
+  /admin/floor-plan: { put: { summary: "Upload the floor-plan PDF, content-type application/pdf, 25 MB max (spaces.manage)" } }
   /admin/inventory/import: { post: { summary: Import seats and teams from the seat JSON (spaces.manage + teams.manage) } }
   /admin/teams: { post: { summary: Create a team (teams.manage) } }
   /admin/teams/{id}:
@@ -66,16 +66,16 @@ paths:
   /admin/users:
     get: { summary: People and permission catalogue (users.manage) }
     post: { summary: Create a person; returns a one-time temporary password (users.manage) }
-  /admin/users/{id}: { patch: { summary: Change name, team, role, permissions, active (users.manage) } }
-  /admin/users/{id}/reset-password: { post: { summary: Issue a temporary password and end sessions (users.manage) } }
-  /admin/audit: { get: { summary: Recent activity (users.manage) } }
-  /public-config: { get: { summary: App name, tagline, welcome note and default theme (no sign-in needed), security: [] } }
-  /config: { get: { summary: Branding, feature switches and the feature catalogue } }
-  /admin/settings: { put: { summary: "Turn features on or off, edit branding and options { showBookerNames, eventsRsvpEnabled }, and the food menu settings menuReviewsVisibility (everyone | summary | managers) and menuHistoryDays (1-90) (super admin). Bumps the config version" } }
-  /me/profile: { patch: { summary: Avatar, birthday, and who's-in visibility } }
-  /me/vibes: { get: { summary: Points, level and badges } }
+  /admin/users/{id}: { patch: { summary: "Change name, team, username, active (users.edit) and role, role template, permissions (users.change_roles). Non-super-admins can only grant permissions they hold, never the super-admin-only ones" } }
+  /admin/users/{id}/reset-password: { post: { summary: Issue a temporary password and end sessions (users.reset_password) } }
+  /admin/audit: { get: { summary: Recent activity (users.audit) } }
+  /public-config: { get: { summary: "App name, tagline, welcome note and default theme (no sign-in needed), security: []" } }
+  /config: { get: { summary: "Branding, feature switches and the feature catalogue" } }
+  /admin/settings: { put: { summary: "Turn features on or off (issues, kudos, ...), edit branding and options { showBookerNames, eventsRsvpEnabled, issuePhotosEnabled }, and the food menu settings menuReviewsVisibility (everyone | summary | managers) and menuHistoryDays (1-90) (super admin). Bumps the config version" } }
+  /me/profile: { patch: { summary: "Avatar, birthday, and who's-in visibility" } }
+  /me/vibes: { get: { summary: "Points, level and badges" } }
   /people: { get: { summary: Name directory for pickers } }
-  /links: { get: { summary: Useful links (?manage=1 lets managers read while switched off) } }
+  /links: { get: { summary: "Useful links (?manage=1 lets managers read while switched off)" } }
   /contacts: { get: { summary: Important contacts } }
   /menu: { get: { summary: "The food menu window in one call: { from, to, today, historyDays, visibility, canSeeReviews, items, ratings, dishRatings, mine }. Default window = the kept history + today + 7 days (or ?from=&days=, up to 45). Items carry course, special, likes; ratings follow the menuReviewsVisibility setting. ETag, private" } }
   /menu/{id}/like: { post: { summary: Toggle a like } }
@@ -86,36 +86,57 @@ paths:
   /announcements: { get: { summary: Active announcements (all=1 for managers) } }
   /kudos: { get: { summary: Kudos wall and monthly leaders }, post: { summary: Send a kudos } }
   /kudos/{id}/cheer: { post: { summary: Toggle a cheer } }
-  /kudos/{id}: { delete: { summary: Remove (author or community.manage) } }
+  /kudos/{id}: { delete: { summary: Remove (author or community.moderation) } }
   /polls: { get: { summary: Polls with results and my vote } }
   /polls/{id}/vote: { post: { summary: Vote or change vote } }
   /celebrations: { get: { summary: Birthdays and anniversaries in the next 30 days } }
-  /feedback: { post: { summary: Drop a note in the idea box (anonymous by default) } }
+  /feedback: { post: { summary: "Drop an idea or suggestion in the idea box (category Idea, Suggestion or Other; anonymous by default). Idea handlers who opted in are notified" } }
   /whosin: { get: { summary: People with a desk today who have not opted out } }
-  /admin/links: { post: { summary: Add a link (content.manage) } }
+  /admin/links: { post: { summary: Add a link (content.links) } }
   /admin/links/{id}: { patch: { summary: Edit a link }, delete: { summary: Delete a link } }
-  /admin/contacts: { post: { summary: Add a contact (content.manage) } }
+  /admin/contacts: { post: { summary: Add a contact (content.contacts) } }
   /admin/contacts/{id}: { patch: { summary: Edit a contact }, delete: { summary: Delete a contact } }
-  /admin/announcements: { post: { summary: Publish an announcement (content.manage) } }
+  /admin/announcements: { post: { summary: "Publish an announcement (content.announcements). { notify: true } also notifies everyone who has not switched announcements off" } }
   /admin/announcements/{id}: { patch: { summary: Edit }, delete: { summary: Delete } }
-  /admin/menu: { post: { summary: Add one dish to one or more dates (menu.manage; the day editor is the usual way) } }
+  /admin/menu: { post: { summary: Add one dish to one or more dates (menu.edit; the day editor is the usual way) } }
   /admin/menu/{id}: { delete: { summary: Remove a dish } }
   /admin/menu/day/{date}:
-    get: { summary: "One day's dishes with ids (menu.manage)" }
-    put: { summary: "Replace a whole day in one transaction { items: [{ id?, meal, course, name, diet, description, emoji, special }] } (menu.manage). Dishes keep their ids when the id is sent back or the meal and name match. Max 300 dishes; returns the new dishes, the previous ones (for undo) and counts. Audit-logged" }
-  /admin/menu/copy: { post: { summary: "Put a day's dishes ({ from: date } or { items }) on up to 14 dates { dates, replace } (menu.manage)" } }
-  /admin/menu/templates: { get: { summary: List templates (menu.manage) }, post: { summary: "Save a day as a template { name, items } (same name replaces; max 30)" } }
-  /admin/menu/templates/{id}: { get: { summary: A template's dishes }, delete: { summary: Delete a template } }
+    get: { summary: "One day's dishes with ids (menu.edit)" }
+    put: { summary: "Replace a whole day in one transaction { items: [{ id?, meal, course, name, diet, description, emoji, special }] } (menu.edit). Dishes keep their ids when the id is sent back or the meal and name match. Max 300 dishes; returns the new dishes, the previous ones (for undo) and counts. Audit-logged" }
+  /admin/menu/copy: { post: { summary: "Put a day's dishes ({ from: date } or { items }) on up to 14 dates { dates, replace } (menu.edit)" } }
+  /admin/menu/templates: { get: { summary: List templates (menu.edit) }, post: { summary: "Save a day as a template { name, items } (same name replaces; max 30)" } }
+  /admin/menu/templates/{id}: { get: { summary: "A template's dishes" }, delete: { summary: Delete a template } }
   /admin/menu/templates/{id}/apply: { post: { summary: "Put a template on chosen dates { dates, replace }" } }
-  /admin/menu/reviews: { get: { summary: "Reviews for managers (menu.manage or menu.reviews.view): ?from=&to=&meal=&dish= -> { summary, dishes, trend, reviews }. Anonymous reviews have no author" } }
-  /admin/polls: { post: { summary: Create a poll (community.manage) } }
+  /admin/menu/reviews: { get: { summary: "Reviews for managers (menu.edit or menu.reviews.view): ?from=&to=&meal=&dish= -> { summary, dishes, trend, reviews }. Anonymous reviews have no author" } }
+  /admin/polls: { post: { summary: Create a poll (community.polls) } }
   /admin/polls/{id}/close: { post: { summary: Close a poll } }
   /admin/polls/{id}: { delete: { summary: Delete a poll } }
-  /admin/feedback: { get: { summary: Read the idea box (community.manage) } }
-  /admin/feedback/{id}: { patch: { summary: Mark new, seen or done }, delete: { summary: Delete a note } }
+  /admin/feedback: { get: { summary: Read the idea box (community.ideas) } }
+  /admin/feedback/{id}: { patch: { summary: "Mark new, seen or done" }, delete: { summary: Delete a note } }
   /admin/insights: { get: { summary: Dashboard numbers (insights.view) } }
-  /admin/roles: { get: { summary: Role templates (super admin) }, post: { summary: Create a role template } }
-  /admin/roles/{id}: { patch: { summary: Edit a role template }, delete: { summary: Delete a role template } }components:
+  /admin/roles: { get: { summary: "Role templates with permissions, simpleUi, landing, notifyDefaults and head count (super admin)" }, post: { summary: "Create a role { name, emoji, description, permissions, simpleUi, landing, notifyDefaults }. Older permission strings are expanded; settings.manage and roles.manage are refused" } }
+  /admin/roles/{id}: { patch: { summary: Edit a role template }, delete: { summary: "Delete a role template. 409 ROLE_SYSTEM for built-in roles and ROLE_IN_USE while people hold it" } }
+  /issues/categories: { get: { summary: "Active issue categories for the tiles, plus photosEnabled and reopenDays. Needs the issues feature" } }
+  /issues/similar: { get: { summary: "?categoryId=&resourceId= : up to 5 open issues there as { id, number, status, people, mine, plusOned }. Counts only, never the text of someone else's report" } }
+  /issues:
+    get: { summary: "?scope=mine (default) | assigned | all (issues.view_all). all takes status (open|any|new,...), categoryId, priority, assignee (me|none|id), olderThanDays, overdue=1, q, sort (newest|oldest|priority), offset, limit and returns counts { open, new, unassigned, mine, overdue }" }
+    post: { summary: "Report a problem { categoryId, description, priority?, resourceId?, locationText? }. Idempotency-Key makes a retry return the same issue. Rate limited per person. Routes to the category's default assignee and notifies recipients with one batched insert" }
+  /issues/assignees: { get: { summary: "People an issue can be given to (issues.assign or issues.view_all)" } }
+  /issues/{id}: { get: { summary: "Issue with its timeline. Only the reporter, the assignee or issues.view_all; anyone else gets 404. Internal notes are for staff only" }, patch: { summary: "{ status?, priority?, assigneeId?, note? }. Status and priority need issues.update on an issue you can see; assigning needs issues.assign (you may take an unassigned issue or let go of your own with issues.update). Starting an unassigned issue takes it" } }
+  /issues/{id}/comments: { post: { summary: "{ body, internal? } by the reporter or someone working on the issue; internal notes need issues.update" } }
+  /issues/{id}/reopen: { post: { summary: "Reporter says it is still not fixed, within 7 days of the fix" } }
+  /issues/{id}/help: { post: { summary: "A worker asks managers and escalation recipients for help (internal timeline entry + urgent notification)" } }
+  /issues/{id}/plus-one: { put: { summary: "Add a +1 to someone else's open issue (instead of a duplicate); followers hear the outcome but never see the report" }, delete: { summary: Take the +1 back } }
+  /issues/{id}/photo: { put: { summary: "One photo per issue by the reporter: image/jpeg, image/png or image/webp, 400 KB max (the browser shrinks to about 200 KB); the bytes must match the declared type. Off when the issuePhotosEnabled option is off" }, get: { summary: "The photo (private cache) for people who may see the issue" } }
+  /admin/issue-categories: { get: { summary: "Categories with routing and open counts (issues.manage_categories or notifications.route)" }, post: { summary: "New category (issues.manage_categories)" } }
+  /admin/issue-categories/{id}: { patch: { summary: "Edit name, emoji, description, defaultPriority, slaHours, active (issues.manage_categories)" } }
+  /admin/issue-categories-order: { put: { summary: "{ ids } in display order (issues.manage_categories)" } }
+  /admin/issue-categories/{id}/routes: { put: { summary: "Replace routing { notify, escalate, assign }: people { employeeId } or roles { roleId } (assign: people only) (notifications.route)" } }
+  /admin/issues/export: { get: { summary: "All issues as CSV, optional ?from=&to= (issues.export)" } }
+  /notifications: { get: { summary: "My notifications, newest first (?limit=&before=) with hasMore and unread. Kept 30 days" } }
+  /notifications/read: { post: { summary: "{ ids } or { all: true } marks my own notifications read and returns { unread }" } }
+  /me/notification-prefs: { get: { summary: "The types I may receive (by permission) with my effective choice and where it comes from (you | role | default), and the issue categories I follow" }, put: { summary: "{ types: { id: { inapp: true|false|null } }, categories: { id: true|false|null } }; null resets to the role default. Browser push is stored but not delivered yet" } }
+components:
   securitySchemes:
     cookie: { type: apiKey, in: cookie, name: gcc_session }
 security:

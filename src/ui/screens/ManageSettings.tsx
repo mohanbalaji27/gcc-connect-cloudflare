@@ -9,8 +9,12 @@ const ACCENT_LABELS: Record<string, string> = { green: 'Forest', ocean: 'Ocean',
 const OPTION_HINTS: Partial<Record<OptionKey, string>> = {
   showBookerNames: 'Off by default: people only see that a seat is booked and for when. Managers who can see bookings always see names.',
   eventsRsvpEnabled: 'Turn off to hide the “I’m going” button and the going counts on events.',
+  issuePhotosEnabled: 'On by default. People can attach one small photo (shrunk in their browser to about 200 KB) to a problem report. Turn off to stop accepting photos.',
 };
 const FEATURE_HINTS: Partial<Record<FeatureKey, string>> = {
+  issues: 'Report a problem: tiles for the coffee machine, washrooms, lights and more. Managers choose categories and who is notified under Manage → Issue box.',
+  feedback: 'The Idea box is only for ideas and suggestions. Broken things go to the issue box.',
+  kudos: 'Optional. Off for new installs; existing installs keep what they had.',
   menu: 'The menu card, the quick day editor for the food team, dish likes and meal reviews. Menus and reviews stay saved while it is off. The settings for it are further down.',
 };
 const VISIBILITY_CHOICES: { id: ReviewVisibility; label: string; hint: string }[] = [

@@ -1,0 +1,51 @@
+/* Permission checkboxes, access summary and the save diff. Colours come from the theme variables, so light and dark both work. */
+.pm { display: flex; flex-direction: column; gap: 12px; }
+.pm-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.pm-total { font-size: .8rem; }
+.pm-toolbar .input-icon { flex: 1 1 160px; min-width: 0; }
+.pm-toolbar .input-icon.slim input { min-width: 0; width: 100%; }
+.pm-group { border: 1px solid var(--line); border-radius: 14px; padding: 0 14px 6px; margin: 0; min-width: 0; background: var(--card); }
+.pm-head { display: flex; align-items: center; gap: 10px; padding: 10px 0 6px; flex-wrap: wrap; }
+.pm-title { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; color: var(--ink); flex: 1 1 120px; min-width: 0; }
+.pm-bulk { display: inline-flex; gap: 12px; }
+.pm-bulk .text-link { font-size: .84rem; min-height: 32px; }
+.pm-bulk .text-link:disabled { opacity: .4; }
+.pm-row { display: flex; align-items: flex-start; gap: 12px; padding: 9px 0; border-top: 1px solid var(--line); cursor: pointer; min-height: 44px; }
+.pm-row:first-of-type { border-top: 0; }
+.pm-row input { margin-top: 3px; width: 20px; height: 20px; accent-color: var(--green); flex: none; }
+.pm-row.is-locked { cursor: default; }
+.pm-row.is-locked .pm-text { opacity: .8; }
+.pm-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.pm-text strong { font-size: .93rem; color: var(--ink); display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.pm-text small { color: var(--ink-soft); line-height: 1.35; }
+.pm-tag { font-style: normal; font-weight: 600; font-size: .68rem; padding: 1px 8px; border-radius: 999px; background: var(--green-soft); color: var(--green); display: inline-flex; align-items: center; gap: 4px; }
+.pm-summary { padding: 14px 16px; border-radius: 14px; background: var(--green-soft); color: var(--ink); }
+.pm-summary ul { list-style: none; padding: 0; margin: 8px 0 0; display: flex; flex-direction: column; gap: 6px; }
+.pm-summary li { display: flex; gap: 8px; align-items: flex-start; font-size: .9rem; }
+.pm-summary li svg { flex: none; margin-top: 3px; color: var(--green); }
+.pm-summary p { margin-top: 6px; font-size: .9rem; }
+.pm-diff { padding: 12px 14px; border-radius: 12px; margin-top: 10px; }
+.pm-diff ul { list-style: none; padding: 0; margin: 6px 0 0; display: flex; flex-direction: column; gap: 4px; }
+.pm-diff li { display: flex; align-items: center; gap: 8px; font-size: .92rem; }
+.pm-diff.add { background: #e4f5ea; color: #14532d; }
+.pm-diff.remove { background: #fdeeee; color: #8b2323; }
+:root[data-theme="dark"] .pm-diff.add { background: #1c4630; color: #bdf0d1; }
+:root[data-theme="dark"] .pm-diff.remove { background: #4a2626; color: #ffc6c6; }
+:root[data-theme="dark"] .pm-tag { color: #8be0b0; }
+
+/* Role and people editors */
+.role-section { border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+.role-section > h3 { font-size: .95rem; }
+.notify-matrix { display: flex; flex-direction: column; }
+.notify-row { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); min-height: 48px; }
+.notify-row:first-child { border-top: 0; }
+.notify-row > span { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.notify-row small { color: var(--ink-soft); }
+.notify-row input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--green); flex: none; }
+.notify-head { display: flex; justify-content: flex-end; gap: 16px; font-size: .74rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-faint); padding-bottom: 6px; }
+.role-card .chip-row { margin-bottom: 8px; }
+.role-flags { display: flex; flex-wrap: wrap; gap: 6px; }
+.person-name { display: flex; flex-direction: column; }
+.diff-bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: .86rem; color: var(--ink-soft); }
+@media (max-width: 900px) { .pm-row { padding: 11px 0; } }
+@media (max-width: 420px) { .role-section { padding: 12px; } .pm-group { padding: 0 10px 4px; } }

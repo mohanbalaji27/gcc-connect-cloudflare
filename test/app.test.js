@@ -23,6 +23,8 @@ before(async () => {
   baseUrl = `http://127.0.0.1:${server.address().port}`;
   const { hashPassword } = await import('../server/security.js');
   await db.query("INSERT INTO employees (id, email, name, team, role, password_hash) VALUES ('emp-sam','sam@demo.gcc','Sam Rivera','Design','user',$1)", [hashPassword('gccdemo')]);
+  // Kudos is off for brand-new installs; the suite acts like an existing install that already uses it.
+  await db.query(`INSERT INTO app_settings (key, value) VALUES ('features', '{"kudos": true}') ON CONFLICT (key) DO UPDATE SET value = excluded.value`);
 });
 
 beforeEach(async () => {
@@ -76,10 +78,10 @@ test('login exposes only the employee and effective permissions', async () => {
   assert.deepEqual(user.user.permissions, []);
   assert.equal(user.user.password_hash, undefined);
   const admin = await signIn('noah@demo.gcc');
-  assert.ok(admin.user.permissions.includes('events.manage'));
-  assert.ok(!admin.user.permissions.includes('users.manage'));
+  assert.ok(admin.user.permissions.includes('events.create'));
+  assert.ok(!admin.user.permissions.includes('users.view'));
   const root = await signIn('root@demo.gcc');
-  assert.ok(root.user.permissions.includes('users.manage'));
+  assert.ok(root.user.permissions.includes('users.change_roles'));
   const wrong = await fetch(`${baseUrl}/api/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'ava@demo.gcc', password: 'nope' }) });
   assert.equal(wrong.status, 401);
 });
@@ -163,7 +165,7 @@ test('super admin creates users with chosen permissions; users must change the t
   const { temporaryPassword } = await created.json();
   assert.equal((await call(root, 'POST', '/admin/users', { email: 'events.lead@demo.gcc', name: 'Dup' })).status, 409);
   const lead = await signIn('events.lead@demo.gcc', temporaryPassword);
-  assert.deepEqual(lead.user.permissions, ['events.manage']);
+  assert.deepEqual(lead.user.permissions, ['events.create', 'events.edit', 'events.delete'], 'an older stored permission expands to the finer ones it used to cover');
   assert.equal(lead.user.mustChangePassword, true);
   assert.equal((await call(lead, 'GET', '/events')).status, 403);
   const changed = await call(lead, 'POST', '/me/password', { currentPassword: temporaryPassword, newPassword: 'a-much-better-pass' });
@@ -183,7 +185,7 @@ test('only users.manage can change roles, and the final super admin is protected
   const sam = roster.users.find((user) => user.email === 'sam@demo.gcc');
   assert.equal((await call(root, 'PATCH', `/admin/users/${sam.id}`, { role: 'admin' })).status, 204);
   const promoted = await signIn('sam@demo.gcc');
-  assert.ok(promoted.user.permissions.includes('events.manage'));
+  assert.ok(promoted.user.permissions.includes('events.create'));
   assert.equal((await call(root, 'PATCH', `/admin/users/${sam.id}`, { role: 'user' })).status, 204);
 });
 
@@ -467,21 +469,23 @@ test('custom roles grant permissions through a template, and only super admin ma
   const root = await signIn('root@demo.gcc');
   const noah = await signIn('noah@demo.gcc');
   assert.equal((await call(noah, 'GET', '/admin/roles')).status, 403);
-  const created = await call(root, 'POST', '/admin/roles', { name: 'Canteen crew', emoji: '??', permissions: ['menu.manage'] });
+  const created = await call(root, 'POST', '/admin/roles', { name: 'Canteen crew', emoji: '??', permissions: ['menu.edit'] });
   assert.equal(created.status, 201);
   const { id } = await created.json();
   assert.equal((await call(root, 'POST', '/admin/roles', { name: 'canteen crew', permissions: [] })).status, 409);
   assert.equal((await call(root, 'POST', '/admin/roles', { name: 'Weird', permissions: ['root.everything'] })).status, 400);
   const person = await (await call(root, 'POST', '/admin/users', { email: 'chef@demo.gcc', name: 'Chef', role: 'user', customRoleId: id })).json();
   const chef = await signIn('chef@demo.gcc', person.temporaryPassword);
-  assert.ok(chef.user.permissions.includes('menu.manage'));
-  assert.equal(chef.user.permissions.includes('events.manage'), false);
+  assert.ok(chef.user.permissions.includes('menu.edit'));
+  assert.equal(chef.user.permissions.includes('events.create'), false);
   await call(chef, 'POST', '/me/password', { currentPassword: person.temporaryPassword, newPassword: 'a-much-better-pass' });
   const today = new Date().toISOString().slice(0, 10);
   assert.equal((await call(chef, 'POST', '/admin/menu', { date: today, meal: 'snacks', name: 'Samosa' })).status, 201);
   await call(root, 'PATCH', `/admin/roles/${id}`, { permissions: [] });
   assert.equal((await call(chef, 'POST', '/admin/menu', { date: today, meal: 'snacks', name: 'Vada' })).status, 403);
   assert.equal((await call(noah, 'PATCH', `/admin/users/${person.id}`, { customRoleId: 'role-hr' })).status, 403);
+  assert.equal((await call(root, 'DELETE', `/admin/roles/${id}`)).status, 409, 'a role that people hold cannot be deleted');
+  assert.equal((await call(root, 'PATCH', `/admin/users/${person.id}`, { customRoleId: null })).status, 204);
   assert.equal((await call(root, 'DELETE', `/admin/roles/${id}`)).status, 204);
 });
 
@@ -496,7 +500,7 @@ test('impossible dates and header-injecting emails are rejected', async () => {
 test('the manage bypass only covers GET reads of the area a manager runs', async () => {
   const root = await signIn('root@demo.gcc');
   const ava = await signIn();
-  const chef = await (await call(root, 'POST', '/admin/users', { email: 'menu.only@demo.gcc', name: 'Menu Only', permissions: ['menu.manage'] })).json();
+  const chef = await (await call(root, 'POST', '/admin/users', { email: 'menu.only@demo.gcc', name: 'Menu Only', permissions: ['menu.edit'] })).json();
   const menuOnly = await signIn('menu.only@demo.gcc', chef.temporaryPassword);
   await call(menuOnly, 'POST', '/me/password', { currentPassword: chef.temporaryPassword, newPassword: 'a-much-better-pass' });
   await call(root, 'PUT', '/admin/settings', { features: { kudos: false, menu: false } });

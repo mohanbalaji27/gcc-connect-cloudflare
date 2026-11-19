@@ -53,7 +53,41 @@ async function seedAccounts(db, options) {
     await insert('emp-ava', 'ava@demo.gcc', 'Ava Chen', 'Product design', 'user', 'gccdemo');
     await insert('emp-noah', 'noah@demo.gcc', 'Noah Patel', 'Workplace operations', 'admin', 'gccdemo', ADMIN_DEFAULT_PERMISSIONS);
     await insert('emp-root', 'root@demo.gcc', 'Riley Morgan', 'Platform operations', 'super_admin', 'gccdemo');
+    // Facility team: a manager, a staff member (simple big-button home) and a staff member who signs in with an employee ID.
+    const withRole = (id, email, username, name, team, roleId) => db.query(
+      'INSERT INTO employees (id, email, username, name, team, role, password_hash, custom_role_id) VALUES ($1,$2,$3,$4,$5,\'user\',$6,$7)',
+      [id, email, username, name, team, hashPassword('gccdemo'), roleId],
+    );
+    await withRole('emp-meera', 'meera@demo.gcc', null, 'Meera Iyer', 'Facilities', 'role-facility-manager');
+    await withRole('emp-ravi', 'ravi@demo.gcc', null, 'Ravi Kumar', 'Facilities', 'role-facility-staff');
+    await withRole('emp-gate', null, 'emp-1001', 'Gopal Rao', 'Facilities', 'role-facility-staff');
   }
+}
+
+// A few believable reports so the issue box, the queue and the bell are not empty on a fresh demo.
+async function seedIssues(db, options) {
+  if (!options.seedDemo) return;
+  if ((await db.query("SELECT COUNT(*)::int AS count FROM employees WHERE id IN ('emp-ava', 'emp-ravi', 'emp-meera')")).rows[0].count < 3) return;
+  if ((await db.query('SELECT COUNT(*)::int AS count FROM issues')).rows[0].count > 0) return;
+  const issue = (id, category, title, description, place, priority, status, reporter, assignee, hoursAgo) => db.query(
+    `INSERT INTO issues (id, title, description, category_id, location_text, priority, status, reporter_id, assignee_id, created_at, updated_at, resolved_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, now() - make_interval(hours => $10), now() - make_interval(hours => $10 / 2), CASE WHEN $7 = 'resolved' THEN now() - interval '1 hour' END)`,
+    [id, title, description, category, place, priority, status, reporter, assignee, hoursAgo],
+  );
+  await issue('issue-demo-1', 'icat-cafeteria', 'Coffee machine is leaking', 'Coffee machine is leaking onto the counter', 'Cafeteria · 2nd floor', 'high', 'in_progress', 'emp-ava', 'emp-ravi', 5);
+  await issue('issue-demo-2', 'icat-washroom', 'Tap does not turn off', 'Tap does not turn off properly in the ladies washroom', 'Washroom · 3rd floor', 'normal', 'new', 'emp-noah', null, 2);
+  await issue('issue-demo-3', 'icat-ac', 'Too cold near the windows', 'It is freezing near the north windows', 'North wing', 'low', 'acknowledged', 'emp-ava', 'emp-ravi', 30);
+  await issue('issue-demo-4', 'icat-lifts', 'Lift 2 makes a grinding noise', 'Lift 2 makes a grinding noise between floors 2 and 3', 'Lift lobby', 'urgent', 'new', 'emp-ava', null, 1);
+  await issue('issue-demo-5', 'icat-it', 'Display in Meeting Room B is blank', 'The display stays blank after the laptop is connected', 'Meeting Room B', 'normal', 'resolved', 'emp-noah', 'emp-ravi', 20);
+  await db.query("INSERT INTO issue_updates (issue_id, author_id, kind, body, from_value, to_value) VALUES ('issue-demo-1', 'emp-ravi', 'status', 'On my way with a new seal', 'new', 'in_progress'), ('issue-demo-5', 'emp-ravi', 'status', 'Replaced the HDMI cable', 'in_progress', 'resolved')");
+  await db.query("INSERT INTO issue_plusones (issue_id, employee_id) VALUES ('issue-demo-2', 'emp-ava'), ('issue-demo-4', 'emp-noah'), ('issue-demo-4', 'emp-root')");
+  await db.query(
+    `INSERT INTO notifications (user_id, type, title, body, link) VALUES
+      ('emp-meera', 'issue_urgent', '🚨 Urgent: Lifts', 'Lift lobby · Lift 2 makes a grinding noise', 'issue:issue-demo-4'),
+      ('emp-meera', 'issue_new', 'New issue: Washroom & plumbing', 'Washroom · 3rd floor · Tap does not turn off', 'issue:issue-demo-2'),
+      ('emp-ravi', 'issue_assigned', 'Assigned to you: Cafeteria & pantry', 'Cafeteria · 2nd floor · Coffee machine is leaking', 'issue:issue-demo-1'),
+      ('emp-ava', 'issue_update', 'In progress: Cafeteria & pantry', 'Ravi is on it', 'issue:issue-demo-1')`,
+  );
 }
 
 const ROOMS = [
@@ -171,5 +205,6 @@ export async function prepareDatabase(db, input = {}, migrations) {
   await seedSpaces(db, options);
   await seedEvents(db, options);
   await seedContent(db, options);
+  await seedIssues(db, options);
   return db;
 }

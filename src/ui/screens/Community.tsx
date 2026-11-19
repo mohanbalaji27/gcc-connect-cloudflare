@@ -31,7 +31,7 @@ function KudosWall({ ctx }: { ctx: Ctx }) {
   const { toast, celebrate } = useKit();
   const [data, setData] = useState<{ kudos: Kudos[]; leaders: { id: string; name: string; avatar: string; received: number }[] } | null>(null);
   const [writing, setWriting] = useState(false);
-  const canModerate = ctx.user.permissions.includes('community.manage');
+  const canModerate = ctx.user.permissions.includes('community.moderation');
 
   const load = useCallback(async () => {
     try { setData(await api('/kudos')); } catch (reason) { toast(messageOf(reason), 'error'); setData({ kudos: [], leaders: [] }); }
@@ -199,9 +199,9 @@ function IdeaBox() {
   }
   return (
     <form className="panel form-stack idea-box" onSubmit={submit}>
-      <h2>Got an idea, or something bugging you?</h2>
-      <p className="muted">Drop it in the box. Only people who run the community can read it.</p>
-      <div className="chip-row">{['Idea', 'Issue', 'Kudos', 'Other'].map((c) => <button type="button" key={c} className={`chip ${category === c ? 'on' : ''}`} onClick={() => setCategory(c)}>{c}</button>)}</div>
+      <h2>Got an idea or a suggestion?</h2>
+      <p className="muted">Drop it in the box. Only people who run the community can read it. Something broken that needs fixing? Use “Report a problem” instead.</p>
+      <div className="chip-row">{['Idea', 'Suggestion', 'Other'].map((c) => <button type="button" key={c} className={`chip ${category === c ? 'on' : ''}`} onClick={() => setCategory(c)}>{c}</button>)}</div>
       <Field label="Your note" hint={`${message.length}/1000`}><textarea value={message} onChange={(e) => setMessage(e.target.value)} rows={5} maxLength={1000} required placeholder="It would be great if…" /></Field>
       <label className="check"><input type="checkbox" checked={anonymous} onChange={(e) => setAnonymous(e.target.checked)} /><span>Send anonymously (we don&apos;t store who you are)</span></label>
       <button className="button button-primary" disabled={busy}>{busy ? 'Sending…' : 'Drop it in the box'}</button>

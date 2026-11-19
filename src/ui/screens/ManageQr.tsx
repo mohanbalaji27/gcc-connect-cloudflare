@@ -5,14 +5,15 @@ import { api, messageOf } from '../../lib/api';
 import { dateKeyInIndia, downloadDataUrl, inIndia, timeKeyInIndia, todayInIndia, toInstant } from '../../lib/format';
 import { STAY_OPTIONS } from '../../lib/stay';
 import { Empty, Field, Icon, Spinner, useKit } from '../kit';
+import type { Ctx } from '../App';
 
-export function ManageQr() {
+export function ManageQr({ ctx }: { ctx: Ctx }) {
   const { toast } = useKit();
   const [resources, setResources] = useState<Resource[]>([]);
   const [people, setPeople] = useState<{ id: string; name: string; email: string }[]>([]);
   const [tokens, setTokens] = useState<TokenRow[] | null>(null);
   const [resourceId, setResourceId] = useState('');
-  const [mode, setMode] = useState<'label' | 'noexpiry' | 'expiry'>('noexpiry');
+  const [mode, setMode] = useState<'label' | 'noexpiry' | 'expiry' | 'report'>('noexpiry');
   const [expiryDate, setExpiryDate] = useState(todayInIndia(7));
   const [expiryTime, setExpiryTime] = useState('18:00');
   const [uses, setUses] = useState<'unlimited' | 'limited'>('unlimited');
@@ -61,7 +62,11 @@ export function ManageQr() {
     const subtitle = [resource.type === 'desk' ? 'Desk' : 'Room', resource.team?.name ?? resource.zone].filter(Boolean).join(' \u00b7 ');
     setBusy(true);
     try {
-      if (mode === 'label') {
+      if (mode === 'report') {
+        // Not a secret: anyone signed in can use it, and it only opens the problem form pointing at this place.
+        await render(`${location.origin}/?report=${encodeURIComponent(resource.id)}`, resource.label, 'Scan to report a problem');
+        toast('Report-a-problem sticker ready. Print it and stick it on.', 'success');
+      } else if (mode === 'label') {
         await render(`${location.origin}/?resource=${encodeURIComponent(resource.id)}${stayParam}`, resource.label, subtitle);
         toast('Permanent label ready — print it and stick it on.', 'success');
       } else {
@@ -94,9 +99,10 @@ export function ManageQr() {
           <label><input type="radio" checked={mode === 'label'} onChange={() => setMode('label')} /> <span><strong>Permanent label</strong><small>Opens the space so anyone signed in can book it normally.</small></span></label>
           <label><input type="radio" checked={mode === 'noexpiry'} onChange={() => setMode('noexpiry')} /> <span><strong>Booking code · no expiry</strong><small>Works until you revoke it.</small></span></label>
           <label><input type="radio" checked={mode === 'expiry'} onChange={() => setMode('expiry')} /> <span><strong>Booking code · expires</strong><small>Stops working at the time you choose.</small></span></label>
+          {ctx.flag('issues') && <label><input type="radio" checked={mode === 'report'} onChange={() => setMode('report')} /> <span><strong>Report-a-problem sticker</strong><small>Scanning opens the issue form already pointing at this seat or room.</small></span></label>}
         </fieldset>
         {mode === 'expiry' && <div className="two"><Field label="Expires on"><input type="date" value={expiryDate} min={todayInIndia()} onChange={(e) => setExpiryDate(e.target.value)} required /></Field><Field label="At"><input type="time" value={expiryTime} onChange={(e) => setExpiryTime(e.target.value)} required /></Field></div>}
-        {mode !== 'label' && (
+        {mode !== 'label' && mode !== 'report' && (
           <>
             <div className="two">
               <Field label="Uses"><select value={uses} onChange={(e) => setUses(e.target.value as 'unlimited' | 'limited')}><option value="unlimited">Unlimited</option><option value="limited">Limited</option></select></Field>
@@ -105,8 +111,8 @@ export function ManageQr() {
             <Field label="Only for (optional)"><select value={person} onChange={(e) => setPerson(e.target.value)}><option value="">Anyone signed in</option>{people.map((p) => <option key={p.id} value={p.id}>{p.name} · {p.email}</option>)}</select></Field>
           </>
         )}
-        <Field label="Suggested stay when scanned" hint="People can still change it before booking. Leave on &ldquo;Their usual&rdquo; to use each person's last choice."><select value={suggestStay} onChange={(e) => setSuggestStay(e.target.value)}><option value="">Their usual</option>{STAY_OPTIONS.map((o) => <option key={o.code} value={o.code}>{o.label}</option>)}</select></Field>
-        <button className="button button-primary" disabled={busy || !resourceId}>{busy ? 'Working…' : mode === 'label' ? 'Generate label' : 'Create booking QR'}</button>
+        {mode !== 'report' && <Field label="Suggested stay when scanned" hint="People can still change it before booking. Leave on &ldquo;Their usual&rdquo; to use each person's last choice."><select value={suggestStay} onChange={(e) => setSuggestStay(e.target.value)}><option value="">Their usual</option>{STAY_OPTIONS.map((o) => <option key={o.code} value={o.code}>{o.label}</option>)}</select></Field>}
+        <button className="button button-primary" disabled={busy || !resourceId}>{busy ? 'Working…' : mode === 'label' ? 'Generate label' : mode === 'report' ? 'Generate sticker' : 'Create booking QR'}</button>
         {result && (
           <div className="qr-result">
             <img src={result.image} alt={`QR code for ${result.label}`} width={220} />

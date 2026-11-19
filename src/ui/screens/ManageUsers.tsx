@@ -1,69 +1,62 @@
-import { useCallback, useEffect, useState } from 'react';
-import { ALL_PERMISSIONS, PERMISSION_LABELS, type AuditEntry, type CustomRole, type ManagedUser, type Permission, type Role } from '../../lib/types';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import type { AuditEntry, CustomRole, ManagedUser, Permission, Role } from '../../lib/types';
 import { api, messageOf } from '../../lib/api';
 import { inIndia } from '../../lib/format';
+import { canGrant, allInfos } from '../../lib/permissions';
 import type { Ctx } from '../App';
 import { Empty, Field, Icon, Modal, Spinner, useKit } from '../kit';
+import { AccessSummary, DiffConfirm, PermissionMatrix } from '../PermissionMatrix';
 
-const ADMIN_DEFAULTS: Permission[] = ALL_PERMISSIONS.filter((permission) => permission !== 'users.manage');
 const roleName = (role: Role) => (role === 'super_admin' ? 'Super admin' : role === 'admin' ? 'Admin' : 'Employee');
-
-function PermissionPicker({ value, onChange, disabled }: { value: Permission[]; onChange: (next: Permission[]) => void; disabled?: boolean }) {
-  return (
-    <fieldset className="perm-grid" disabled={disabled}>
-      <legend>Extra permissions</legend>
-      {ALL_PERMISSIONS.map((permission) => (
-        <label key={permission} className="check">
-          <input type="checkbox" checked={value.includes(permission)} onChange={(e) => onChange(e.target.checked ? [...value, permission] : value.filter((p) => p !== permission))} />
-          <span>{PERMISSION_LABELS[permission]}</span>
-        </label>
-      ))}
-    </fieldset>
-  );
-}
+type TemplateRole = CustomRole & { systemKey?: string | null };
 
 export function ManageUsers({ ctx }: { ctx: Ctx }) {
   const { toast } = useKit();
   const [users, setUsers] = useState<ManagedUser[] | null>(null);
-  const [roles, setRoles] = useState<CustomRole[]>([]);
+  const [roles, setRoles] = useState<TemplateRole[]>([]);
   const [editing, setEditing] = useState<ManagedUser | 'new' | null>(null);
   const [secret, setSecret] = useState<{ name: string; password: string } | null>(null);
   const [search, setSearch] = useState('');
+  const can = (permission: Permission) => ctx.user.permissions.includes(permission);
 
   const load = useCallback(async () => {
-    try { const result = await api<{ users: ManagedUser[]; roles: CustomRole[] }>('/admin/users'); setUsers(result.users); setRoles(result.roles); } catch (reason) { toast(messageOf(reason), 'error'); setUsers([]); }
+    try { const result = await api<{ users: ManagedUser[]; roles: TemplateRole[] }>('/admin/users'); setUsers(result.users); setRoles(result.roles); } catch (reason) { toast(messageOf(reason), 'error'); setUsers([]); }
   }, [toast]);
   useEffect(() => { void load(); }, [load]);
 
   const term = search.trim().toLowerCase();
-  const shown = users?.filter((user) => !term || `${user.name} ${user.email} ${user.team}`.toLowerCase().includes(term)) ?? [];
+  const shown = users?.filter((user) => !term || `${user.name} ${user.email} ${user.username ?? ''} ${user.team}`.toLowerCase().includes(term)) ?? [];
+  const templateOf = (user: ManagedUser) => roles.find((role) => role.id === user.customRoleId);
 
   return (
     <section className="panel">
       <div className="panel-head">
-        <h2>People & permissions</h2>
+        <h2>People & access</h2>
         <div className="panel-tools">
           <div className="input-icon slim"><Icon name="search" size={16} /><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search people" aria-label="Search people" /></div>
-          <button className="button button-primary button-small" onClick={() => setEditing('new')}><Icon name="plus" size={16} /> Add person</button>
+          {can('users.create') && <button className="button button-primary button-small" onClick={() => setEditing('new')}><Icon name="plus" size={16} /> Add person</button>}
         </div>
       </div>
       {users === null ? <Spinner /> : shown.length === 0 ? <Empty icon="users" title="No one found" /> : (
         <div className="table-wrap">
           <table className="table">
-            <thead><tr><th>Person</th><th>Role</th><th>Can manage</th><th>Status</th><th /></tr></thead>
-            <tbody>{shown.map((user) => (
-              <tr key={user.id} className={user.active ? '' : 'muted-row'}>
-                <td><strong>{user.name}</strong><small>{user.email}{user.team ? ` · ${user.team}` : ''}</small></td>
-                <td><span className={`pill ${user.role === 'super_admin' ? 'pill-hot' : user.role === 'admin' ? 'pill-ok' : ''}`}>{roleName(user.role)}</span></td>
-                <td>{user.role === 'super_admin' ? 'Everything' : user.permissions.length ? user.permissions.map((p) => p.replace('.manage', '')).join(', ') : '—'}</td>
-                <td>{user.active ? 'Active' : 'Suspended'}</td>
-                <td className="right"><button className="icon-button" aria-label={`Edit ${user.name}`} onClick={() => setEditing(user)} disabled={user.id === ctx.user.id && false}><Icon name="edit" /></button></td>
-              </tr>
-            ))}</tbody>
+            <thead><tr><th>Person</th><th>Role</th><th>Access</th><th>Status</th><th /></tr></thead>
+            <tbody>{shown.map((user) => {
+              const template = templateOf(user);
+              return (
+                <tr key={user.id} className={user.active ? '' : 'muted-row'}>
+                  <td><strong>{user.name}</strong><small>{user.email || `@${user.username}`}{user.email && user.username ? ` · @${user.username}` : ''}{user.team ? ` · ${user.team}` : ''}</small></td>
+                  <td><span className={`pill ${user.role === 'super_admin' ? 'pill-hot' : user.role === 'admin' ? 'pill-ok' : ''}`}>{roleName(user.role)}</span>{template && <small>{template.emoji} {template.name}</small>}</td>
+                  <td>{user.role === 'super_admin' ? 'Everything' : user.permissions.length ? `${user.permissions.length} permission${user.permissions.length === 1 ? '' : 's'}` : '—'}</td>
+                  <td>{user.active ? 'Active' : 'Suspended'}</td>
+                  <td className="right"><button className="icon-button" aria-label={`Edit ${user.name}`} onClick={() => setEditing(user)}><Icon name="edit" /></button></td>
+                </tr>
+              );
+            })}</tbody>
           </table>
         </div>
       )}
-      {editing && <UserForm user={editing === 'new' ? null : editing} roles={roles} self={ctx.user.id} onClose={() => setEditing(null)} onSaved={(result) => { setEditing(null); void load(); if (result) setSecret(result); }} />}
+      {editing && <UserForm ctx={ctx} user={editing === 'new' ? null : editing} roles={roles} onClose={() => setEditing(null)} onSaved={(result) => { setEditing(null); void load(); if (result) setSecret(result); }} />}
       {secret && (
         <Modal title="Temporary password" onClose={() => setSecret(null)}>
           <p>Share this with <strong>{secret.name}</strong> securely. It’s shown once, and they’ll be asked to choose their own at first sign-in.</p>
@@ -75,10 +68,16 @@ export function ManageUsers({ ctx }: { ctx: Ctx }) {
   );
 }
 
-function UserForm({ user, roles, self, onClose, onSaved }: { user: ManagedUser | null; roles: CustomRole[]; self: string; onClose: () => void; onSaved: (secret?: { name: string; password: string }) => void }) {
+function UserForm({ ctx, user, roles, onClose, onSaved }: { ctx: Ctx; user: ManagedUser | null; roles: TemplateRole[]; onClose: () => void; onSaved: (secret?: { name: string; password: string }) => void }) {
   const { toast } = useKit();
+  const catalog = ctx.config.permissionCatalog;
+  const isSuper = ctx.user.role === 'super_admin';
+  const can = (permission: Permission) => ctx.user.permissions.includes(permission);
+  const mayEdit = user ? can('users.edit') : can('users.create');
+  const mayRoles = can('users.change_roles');
   const [name, setName] = useState(user?.name ?? '');
   const [email, setEmail] = useState(user?.email ?? '');
+  const [username, setUsername] = useState(user?.username ?? '');
   const [team, setTeam] = useState(user?.team ?? '');
   const [role, setRole] = useState<Role>(user?.role ?? 'user');
   const [permissions, setPermissions] = useState<Permission[]>(user?.ownPermissions ?? []);
@@ -88,27 +87,43 @@ function UserForm({ user, roles, self, onClose, onSaved }: { user: ManagedUser |
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [reviewing, setReviewing] = useState(false);
+
+  const template = roles.find((item) => item.id === customRoleId);
+  const inherited = role === 'super_admin' ? [] : template?.permissions ?? [];
+  const effective = useMemo(() => (role === 'super_admin' ? allInfos(catalog).map((info) => info.id) : [...new Set([...permissions, ...inherited])]), [role, permissions, inherited, catalog]);
+  const before = user ? (user.role === 'super_admin' ? allInfos(catalog).map((info) => info.id) : user.permissions) : [];
+  const changed = Boolean(user) && (effective.length !== before.length || effective.some((id) => !before.includes(id)));
 
   const changeRole = (next: Role) => {
     setRole(next);
-    setPermissions(next === 'admin' ? ADMIN_DEFAULTS : next === 'user' ? [] : ALL_PERMISSIONS);
+    const infos = allInfos(catalog);
+    setPermissions(next === 'admin' ? catalog.adminDefaults.filter((id) => { const info = infos.find((i) => i.id === id); return info ? canGrant(ctx.user, info) : false; }) : []);
   };
 
-  async function submit(event: React.FormEvent) {
-    event.preventDefault();
+  async function save() {
     setBusy(true);
     setError('');
     try {
       if (user) {
-        await api(`/admin/users/${user.id}`, { method: 'PATCH', body: { name, team, role, active, customRoleId: customRoleId || null, joinedOn: joinedOn || undefined, permissions: role === 'super_admin' ? [] : permissions } });
+        const body: Record<string, unknown> = { name, team, active, joinedOn: joinedOn || undefined, username: username.trim() || null };
+        if (mayRoles) Object.assign(body, { role, customRoleId: customRoleId || null, permissions: role === 'super_admin' ? [] : permissions });
+        await api(`/admin/users/${user.id}`, { method: 'PATCH', body });
         toast('Saved.', 'success');
         onSaved();
       } else {
-        const created = await api<{ temporaryPassword: string }>('/admin/users', { method: 'POST', body: { name, email, team, role, customRoleId: customRoleId || undefined, joinedOn: joinedOn || undefined, permissions: role === 'super_admin' ? [] : permissions, password: password || undefined } });
+        const body: Record<string, unknown> = { name, email: email.trim() || undefined, username: username.trim() || undefined, team, joinedOn: joinedOn || undefined, password: password || undefined };
+        if (mayRoles) Object.assign(body, { role, customRoleId: customRoleId || undefined, permissions: role === 'super_admin' ? [] : permissions });
+        const created = await api<{ temporaryPassword: string }>('/admin/users', { method: 'POST', body });
         toast(`${name} is on board!`, 'success');
         onSaved({ name, password: created.temporaryPassword });
       }
-    } catch (reason) { setError(messageOf(reason)); } finally { setBusy(false); }
+    } catch (reason) { setError(messageOf(reason)); setReviewing(false); } finally { setBusy(false); }
+  }
+  function submit(event: React.FormEvent) {
+    event.preventDefault();
+    if (!user && !email.trim() && !username.trim()) return setError('Give the person a work email, a username (employee ID), or both.');
+    if (user && mayRoles && changed) setReviewing(true); else void save();
   }
 
   async function reset() {
@@ -118,24 +133,54 @@ function UserForm({ user, roles, self, onClose, onSaved }: { user: ManagedUser |
 
   return (
     <Modal title={user ? `Edit ${user.name}` : 'Add a person'} onClose={onClose} wide>
-      <form className="form-grid" onSubmit={submit}>
-        <Field label="Full name"><input value={name} onChange={(e) => setName(e.target.value)} required maxLength={100} autoFocus /></Field>
-        <Field label="Email"><input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required disabled={Boolean(user)} /></Field>
-        <Field label="Team (label only)"><input value={team} onChange={(e) => setTeam(e.target.value)} maxLength={100} /></Field>
-        <Field label="Role"><select value={role} onChange={(e) => changeRole(e.target.value as Role)}><option value="user">Employee</option><option value="admin">Admin</option><option value="super_admin">Super admin (everything)</option></select></Field>
-        {role !== 'super_admin' && <Field label="Role template" hint={roles.find((r) => r.id === customRoleId)?.description || 'Adds a ready-made bundle of permissions'}><select value={customRoleId} onChange={(e) => setCustomRoleId(e.target.value)}><option value="">None</option>{roles.map((r) => <option key={r.id} value={r.id}>{r.emoji} {r.name}</option>)}</select></Field>}
-        <Field label="Joined on (for anniversaries)"><input type="date" value={joinedOn} onChange={(e) => setJoinedOn(e.target.value)} /></Field>
-        {role !== 'super_admin' ? <div className="span-2"><PermissionPicker value={permissions} onChange={setPermissions} /></div> : <p className="muted span-2">Super admins can do everything, including managing other people.</p>}
-        {!user && <div className="span-2"><Field label="Password (optional)" hint="Leave blank to generate a temporary one. They must change it at first sign-in."><input type="text" value={password} onChange={(e) => setPassword(e.target.value)} minLength={10} maxLength={128} autoComplete="off" /></Field></div>}
-        {user && <label className="check span-2"><input type="checkbox" checked={active} disabled={user.id === self} onChange={(e) => setActive(e.target.checked)} /> <span>Account active {user.id === self && '(you can’t suspend yourself)'}</span></label>}
-        {error && <div className="form-error span-2" role="alert">{error}</div>}
-        <div className="modal-actions span-2">
-          {user && <button type="button" className="button button-small" onClick={() => void reset()}><Icon name="key" size={16} /> Reset password</button>}
+      <form className="form-stack" onSubmit={submit}>
+        <div className="form-grid">
+          <Field label="Full name"><input value={name} onChange={(e) => setName(e.target.value)} required maxLength={100} autoFocus disabled={!mayEdit} /></Field>
+          <Field label="Team (label only)"><input value={team} onChange={(e) => setTeam(e.target.value)} maxLength={100} disabled={!mayEdit} /></Field>
+          <Field label="Work email" hint={user ? 'The email cannot be changed here.' : 'Optional if you give a username.'}><input type="email" value={email} onChange={(e) => setEmail(e.target.value)} disabled={Boolean(user) || !mayEdit} placeholder="name@company.com" /></Field>
+          <Field label="Username / employee ID" hint="For people without a work email. They can sign in with either. 3 to 32 letters, numbers, dots, dashes or underscores."><input value={username} onChange={(e) => setUsername(e.target.value)} disabled={!mayEdit} maxLength={32} autoCapitalize="off" autoComplete="off" placeholder="emp-0042" /></Field>
+          <Field label="Joined on (for anniversaries)"><input type="date" value={joinedOn} onChange={(e) => setJoinedOn(e.target.value)} disabled={!mayEdit} /></Field>
+          {!user && <Field label="Password (optional)" hint="Leave blank to generate a temporary one. They must change it at first sign-in."><input type="text" value={password} onChange={(e) => setPassword(e.target.value)} minLength={10} maxLength={128} autoComplete="off" /></Field>}
+        </div>
+
+        {mayRoles ? (
+          <section className="role-section">
+            <h3>Role and access</h3>
+            <div className="form-grid">
+              <Field label="Role">
+                <select value={role} onChange={(e) => changeRole(e.target.value as Role)} disabled={user?.role === 'super_admin' && !isSuper}>
+                  <option value="user">Employee</option><option value="admin">Admin</option>{(isSuper || role === 'super_admin') && <option value="super_admin">Super admin (everything)</option>}
+                </select>
+              </Field>
+              {role !== 'super_admin' && (
+                <Field label="Role template" hint={template?.description || 'A ready-made bundle of permissions, notifications and home screen.'}>
+                  <select value={customRoleId} onChange={(e) => setCustomRoleId(e.target.value)}>
+                    <option value="">None</option>
+                    {roles.map((item) => <option key={item.id} value={item.id}>{item.emoji} {item.name}{item.simpleUi ? ' (simple home)' : ''}</option>)}
+                  </select>
+                </Field>
+              )}
+            </div>
+            {role !== 'super_admin' ? (
+              <>
+                <strong className="mini-label">Extra permissions on top of the template</strong>
+                <PermissionMatrix catalog={catalog} value={permissions.filter((id) => !inherited.includes(id))} inherited={inherited} onChange={(next) => setPermissions([...next, ...permissions.filter((id) => inherited.includes(id))])} actor={ctx.user} />
+              </>
+            ) : <p className="muted">Super admins can do everything, including managing people, roles and settings.</p>}
+            <AccessSummary catalog={catalog} permissions={effective} everything={role === 'super_admin'} />
+          </section>
+        ) : <p className="muted">You can add and edit people. Choosing roles and permissions needs the “Change roles and permissions” permission.</p>}
+
+        {user && <label className="check"><input type="checkbox" checked={active} disabled={user.id === ctx.user.id || !mayEdit} onChange={(e) => setActive(e.target.checked)} /> <span>Account active {user.id === ctx.user.id && '(you can’t suspend yourself)'}</span></label>}
+        {error && <div className="form-error" role="alert">{error}</div>}
+        <div className="modal-actions">
+          {user && can('users.reset_password') && <button type="button" className="button button-small" onClick={() => void reset()}><Icon name="key" size={16} /> Reset password</button>}
           <span className="spacer" />
           <button type="button" className="button" onClick={onClose}>Cancel</button>
           <button className="button button-primary" disabled={busy}>{busy ? 'Saving…' : user ? 'Save changes' : 'Create account'}</button>
         </div>
       </form>
+      {reviewing && user && <DiffConfirm catalog={catalog} before={before} after={effective} subject={user.name} busy={busy} onConfirm={() => void save()} onCancel={() => setReviewing(false)} />}
     </Modal>
   );
 }

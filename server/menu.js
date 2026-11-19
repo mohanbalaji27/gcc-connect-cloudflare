@@ -13,7 +13,7 @@ const average = (value) => (value === null || value === undefined ? null : Numbe
 
 // Everything about the food menu: reading it, the whole-day bulk editor, copies and templates, reviews and retention.
 export function registerMenu({ app, db, requireAuth, requireCsrf, requirePermission, requireAnyPermissions, audit, fail, text, limit, feature, readSettings, id8, validDate, dateKey, addDays }) {
-  const canSeeReviews = (user) => user.permissions.includes('menu.manage') || user.permissions.includes('menu.reviews.view');
+  const canSeeReviews = (user) => user.permissions.includes('menu.edit') || user.permissions.includes('menu.reviews.view');
   const settingsOf = async (req) => req.appSettings ?? readSettings();
 
   // ---------- Retention: at most one cheap cleanup per day, started by whoever touches the menu first ----------
@@ -214,7 +214,7 @@ export function registerMenu({ app, db, requireAuth, requireCsrf, requirePermiss
   //   everyone: everyone reads ratings and comments, with names unless the author posted anonymously
   //   summary:  everyone sees the average and count; comments only for managers (and each person's own review)
   //   managers: only managers see ratings and comments; people see just their own review
-  // Managers are people with menu.manage or menu.reviews.view. An anonymous review never exposes its author to anyone.
+  // Managers are people with menu.edit or menu.reviews.view. An anonymous review never exposes its author to anyone.
   async function mealState(client, user, date, meal, showRatings) {
     const [ratings, mine] = await Promise.all([
       showRatings ? client.query(`
@@ -313,7 +313,7 @@ export function registerMenu({ app, db, requireAuth, requireCsrf, requirePermiss
   });
 
   // ---------- Manager reviews view ----------
-  app.get('/api/admin/menu/reviews', requireAnyPermissions('menu.manage', 'menu.reviews.view'), async (req, res) => {
+  app.get('/api/admin/menu/reviews', requireAnyPermissions('menu.edit', 'menu.reviews.view'), async (req, res) => {
     const settings = await settingsOf(req);
     const today = dateKey(new Date());
     const from = validDate(req.query.from) ? req.query.from : addDays(today, -6);
@@ -352,12 +352,12 @@ export function registerMenu({ app, db, requireAuth, requireCsrf, requirePermiss
   });
 
   // ---------- Managers: the whole-day editor ----------
-  app.get('/api/admin/menu/day/:date', requirePermission('menu.manage'), async (req, res) => {
+  app.get('/api/admin/menu/day/:date', requirePermission('menu.edit'), async (req, res) => {
     if (!validDate(req.params.date)) throw fail(400, 'INVALID_DATE', 'Choose a valid date.');
     res.json({ date: req.params.date, items: (await readDay(db, req.params.date)).map(shape) });
   });
 
-  app.put('/api/admin/menu/day/:date', requirePermission('menu.manage'), requireCsrf, async (req, res) => {
+  app.put('/api/admin/menu/day/:date', requirePermission('menu.edit'), requireCsrf, async (req, res) => {
     if (!limit(`menu-day:${req.user.id}`, 90, 10 * 60_000)) throw fail(429, 'RATE_LIMITED', 'Many saves in a row. Wait a moment and try again.');
     const settings = await settingsOf(req);
     const [date] = cleanDates(req.params.date, await dayRange(settings), true);
@@ -371,7 +371,7 @@ export function registerMenu({ app, db, requireAuth, requireCsrf, requirePermiss
     res.json({ date, ...result, duplicatesDropped: duplicates });
   });
 
-  app.post('/api/admin/menu/copy', requirePermission('menu.manage'), requireCsrf, async (req, res) => {
+  app.post('/api/admin/menu/copy', requirePermission('menu.edit'), requireCsrf, async (req, res) => {
     if (!limit(`menu-day:${req.user.id}`, 90, 10 * 60_000)) throw fail(429, 'RATE_LIMITED', 'Many saves in a row. Wait a moment and try again.');
     const settings = await settingsOf(req);
     const body = req.body ?? {};
@@ -391,16 +391,16 @@ export function registerMenu({ app, db, requireAuth, requireCsrf, requirePermiss
 
   // ---------- Managers: templates ("weekly repeating menu") ----------
   const templateName = (value) => clean(value, 60, 'Template name', true);
-  app.get('/api/admin/menu/templates', requirePermission('menu.manage'), async (_req, res) => {
+  app.get('/api/admin/menu/templates', requirePermission('menu.edit'), async (_req, res) => {
     const { rows } = await db.query(`SELECT id, name, jsonb_array_length(items)::int AS count, created_at, now() AS read_at FROM menu_templates ORDER BY lower(name) LIMIT 100`);
     res.json({ templates: rows.map(({ read_at: _read, ...row }) => row) });
   });
-  app.get('/api/admin/menu/templates/:id', requirePermission('menu.manage'), async (req, res) => {
+  app.get('/api/admin/menu/templates/:id', requirePermission('menu.edit'), async (req, res) => {
     const row = (await db.query('SELECT id, name, items, now() AS read_at FROM menu_templates WHERE id = $1', [req.params.id])).rows[0];
     if (!row) throw fail(404, 'NOT_FOUND', 'That template no longer exists.');
     res.json({ id: row.id, name: row.name, items: row.items });
   });
-  app.post('/api/admin/menu/templates', requirePermission('menu.manage'), requireCsrf, async (req, res) => {
+  app.post('/api/admin/menu/templates', requirePermission('menu.edit'), requireCsrf, async (req, res) => {
     const name = templateName(req.body?.name);
     const { items } = cleanItems(req.body?.items);
     if (!items.length) throw fail(400, 'NOTHING_TO_SAVE', 'Add some dishes before saving a template.');
@@ -414,13 +414,13 @@ export function registerMenu({ app, db, requireAuth, requireCsrf, requirePermiss
     });
     res.status(201).json({ id, name, count: items.length });
   });
-  app.delete('/api/admin/menu/templates/:id', requirePermission('menu.manage'), requireCsrf, async (req, res) => {
+  app.delete('/api/admin/menu/templates/:id', requirePermission('menu.edit'), requireCsrf, async (req, res) => {
     const result = await db.query('DELETE FROM menu_templates WHERE id = $1 RETURNING name', [req.params.id]);
     if (!result.rows.length) throw fail(404, 'NOT_FOUND', 'That template is already gone.');
     await audit(db, req.user.id, 'menu.template-deleted', req.params.id, result.rows[0].name);
     res.status(204).end();
   });
-  app.post('/api/admin/menu/templates/:id/apply', requirePermission('menu.manage'), requireCsrf, async (req, res) => {
+  app.post('/api/admin/menu/templates/:id/apply', requirePermission('menu.edit'), requireCsrf, async (req, res) => {
     const settings = await settingsOf(req);
     const dates = cleanDates(req.body?.dates, await dayRange(settings));
     const row = (await db.query('SELECT name, items, now() AS read_at FROM menu_templates WHERE id = $1', [req.params.id])).rows[0];
@@ -435,7 +435,7 @@ export function registerMenu({ app, db, requireAuth, requireCsrf, requirePermiss
   });
 
   // ---------- Single dishes (older, still supported) ----------
-  app.post('/api/admin/menu', requirePermission('menu.manage'), requireCsrf, async (req, res) => {
+  app.post('/api/admin/menu', requirePermission('menu.edit'), requireCsrf, async (req, res) => {
     const body = req.body ?? {};
     const dates = Array.isArray(body.dates) ? body.dates : [body.date];
     if (!dates.length || dates.length > 31 || dates.some((d) => !validDate(d))) throw fail(400, 'INVALID_DATE', 'Choose between 1 and 31 valid dates.');
@@ -458,7 +458,7 @@ export function registerMenu({ app, db, requireAuth, requireCsrf, requirePermiss
     });
     res.status(201).json({ added: new Set(dates).size });
   });
-  app.delete('/api/admin/menu/:id', requirePermission('menu.manage'), requireCsrf, async (req, res) => {
+  app.delete('/api/admin/menu/:id', requirePermission('menu.edit'), requireCsrf, async (req, res) => {
     const result = await db.query('DELETE FROM menu_items WHERE id = $1 RETURNING name', [req.params.id]);
     if (!result.rows.length) throw fail(404, 'NOT_FOUND', 'That dish is already gone.');
     res.status(204).end();

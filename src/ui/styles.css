@@ -447,7 +447,7 @@ input.team-name:hover, input.team-name:focus { border-color: #d3dccf; background
 .ext-link:hover { transform: translateY(-3px); box-shadow: var(--shadow-lift); border-color: var(--green); }
 .link-emoji { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 14px; background: var(--green-soft); font-size: 1.4rem; flex: none; }
 .link-text { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-.link-grid, .contact-grid, .role-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+.link-grid, .contact-grid, .role-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr)); gap: 12px; }
 .contact-card, .role-card { background: var(--card); border-radius: 18px; padding: 16px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 8px; animation: rise .3s ease both; }
 .contact-head, .role-head { display: flex; align-items: center; gap: 12px; }
 .contact-head small, .role-head small { display: block; }

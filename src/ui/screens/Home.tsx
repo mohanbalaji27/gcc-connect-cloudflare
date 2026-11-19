@@ -171,6 +171,7 @@ export function HomeScreen({ ctx }: { ctx: Ctx }) {
           ['room', 'Book a room', 'Meetings, cabins and collab zones', () => ctx.startBooking({ kind: 'room' }), 'lilac'],
           ['scan', 'Scan a QR', 'Found a code on a desk? Tap to book', () => ctx.go('scan'), 'orange'],
           ['party', 'What is on', 'Events and community moments', () => ctx.go('events'), 'blue'],
+          ...(ctx.flag('issues') ? [['wrench', 'Report a problem', 'Coffee machine, tap, lights… tell us fast', () => ctx.go('issues'), 'pink'] as [string, string, string, () => void, string]] : []),
         ] as [string, string, string, () => void, string][]).map(([icon, title, subtitle, action, tone]) => (
           <button key={title} className="quick-card" onClick={action}>
             <span className={`quick-icon ${tone}`}><Icon name={icon} size={24} /></span>

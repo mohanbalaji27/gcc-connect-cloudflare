@@ -3,14 +3,21 @@ import type { FeedbackItem, Poll } from '../../lib/types';
 import { api, messageOf } from '../../lib/api';
 import { inIndia } from '../../lib/format';
 import { Empty, Field, Icon, Modal, Spinner, Tabs, useKit } from '../kit';
+import type { Ctx } from '../App';
 
 type Sub = 'polls' | 'feedback';
 
-export function ManageCommunity() {
-  const [sub, setSub] = useState<Sub>('polls');
+export function ManageCommunity({ ctx }: { ctx: Ctx }) {
+  const can = (permission: string) => ctx.user.permissions.includes(permission);
+  const tabs = [
+    ...(can('community.polls') ? [{ id: 'polls' as Sub, label: 'Polls', icon: 'poll' }] : []),
+    ...(can('community.ideas') ? [{ id: 'feedback' as Sub, label: 'Idea box', icon: 'chat' }] : []),
+  ];
+  const [chosen, setSub] = useState<Sub>(tabs[0]?.id ?? 'polls');
+  const sub = tabs.some((tab) => tab.id === chosen) ? chosen : tabs[0]?.id;
   return (
     <div>
-      <Tabs tabs={[{ id: 'polls' as Sub, label: 'Polls', icon: 'poll' }, { id: 'feedback' as Sub, label: 'Idea box', icon: 'chat' }]} value={sub} onChange={setSub} />
+      <Tabs tabs={tabs} value={sub ?? 'polls'} onChange={setSub} />
       {sub === 'polls' ? <PollAdmin /> : <FeedbackInbox />}
     </div>
   );

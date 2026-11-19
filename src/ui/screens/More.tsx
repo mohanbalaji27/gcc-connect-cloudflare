@@ -2,7 +2,7 @@
 import { Avatar, Icon } from '../kit';
 
 const BLURB: Partial<Record<Screen, string>> = {
-  bookings: 'Your upcoming desks and rooms', events: 'Whats on, RSVPs and links', menu: 'Today and the week ahead', community: 'Kudos, polls, birthdays and ideas',
+  bookings: 'Your upcoming desks and rooms', events: 'Whats on, RSVPs and links', menu: 'Today and the week ahead', community: 'Kudos, polls, birthdays and ideas', issues: 'Coffee machine, tap, lights: tell us fast',
   useful: 'Guides, portals and important contacts', scan: 'Found a QR on a desk? Tap here', manage: 'Dashboard, content, people and settings',
 };
 const TONES = ['green', 'lilac', 'orange', 'blue', 'pink', 'teal', 'green', 'lilac'];

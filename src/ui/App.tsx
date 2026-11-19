@@ -6,6 +6,7 @@ import { clearAvailability } from '../lib/availability';
 import { clearResources } from '../lib/resources';
 import { clearMenu } from '../lib/menuData';
 import { applyTheme } from '../lib/theme';
+import { nav as navHandoff } from '../lib/nav';
 import { reloadFloorPlan, resetFloorPlan, type FloorPlanImage } from '../lib/floorplan';
 import { Avatar, Icon, KitProvider, Spinner, useKit, Field } from './kit';
 import { HomeScreen } from './screens/Home';
@@ -13,16 +14,20 @@ import { BookScreen } from './screens/Book';
 import { BookingsScreen } from './screens/Bookings';
 import { EventsScreen } from './screens/Events';
 import { ScanScreen } from './screens/Scan';
-import { ManageScreen } from './screens/Manage';
+import { ManageScreen, manageTabs } from './screens/Manage';
 import { AccountScreen } from './screens/Account';
 import { MenuScreen } from './screens/Menu';
 import { CommunityScreen } from './screens/Community';
 import { UsefulScreen } from './screens/Useful';
 import { MoreScreen } from './screens/More';
+import { IssuesScreen, type IssueFocus } from './screens/Issues';
+import { StaffHome } from './screens/StaffHome';
+import { NotificationBell, NotificationSheet } from './Notifications';
+import './issues.css';
 
-export type Screen = 'home' | 'book' | 'bookings' | 'events' | 'scan' | 'manage' | 'account' | 'menu' | 'community' | 'useful' | 'more';
+export type Screen = 'home' | 'book' | 'bookings' | 'events' | 'scan' | 'manage' | 'account' | 'menu' | 'community' | 'useful' | 'more' | 'issues';
 export type NavItem = [Screen, string, string];
-export interface QrIntent { resourceId: string; token?: string; stay?: string }
+export interface QrIntent { resourceId: string; token?: string; stay?: string; report?: boolean }
 const DEFAULT_BRANDING: Branding = { appName: 'GCC Connect', tagline: 'Your office day, sorted.', accent: 'green', welcome: '' };
 
 export interface Ctx {
@@ -45,6 +50,8 @@ export interface Ctx {
   reloadPlan: () => Promise<void>;
   go: (screen: Screen) => void;
   startBooking: (intent: QrIntent | { kind: 'desk' | 'room' }) => void;
+  /** Opens one issue (from a notification, a task card or a link). */
+  openIssue: (id: string) => void;
 }
 
 function Shell() {
@@ -63,6 +70,9 @@ function Shell() {
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [branding, setBranding] = useState<Branding>(DEFAULT_BRANDING);
   const [configVersion, setConfigVersion] = useState(0);
+  const [unread, setUnread] = useState(0);
+  const [bellOpen, setBellOpen] = useState(false);
+  const [issueFocus, setIssueFocus] = useState<IssueFocus | null>(null);
   const knownVersion = useRef(0);
   const loadingBootstrap = useRef<Promise<void> | null>(null);
   const planVersion = useRef<number | null>(null);
@@ -90,6 +100,7 @@ function Shell() {
     slice('teams', { teams: boot.teams, unassigned: boot.unassignedSeats }, (next) => { setTeams(next.teams); setUnassignedSeats(next.unassigned); });
     slice('map', boot.map, setMapInfo);
     summaryCache.current = { value: boot.summary, at: Date.now() };
+    setUnread(boot.unread ?? 0);
     if (boot.map.floorPlanAvailable && planVersion.current !== boot.map.floorPlanVersion) {
       planVersion.current = boot.map.floorPlanVersion;
       void reloadPlan();
@@ -152,12 +163,17 @@ function Shell() {
   useEffect(() => {
     if (!ready) return undefined;
     void reloadBootstrap().catch(() => {
-      setConfig((current) => current ?? { features: { links: true, contacts: true, menu: true, announcements: true, kudos: true, polls: true, celebrations: true, feedback: true, whosin: true, vibes: true }, branding: DEFAULT_BRANDING, options: { showBookerNames: false, eventsRsvpEnabled: true }, featureCatalog: {} as AppConfig['featureCatalog'], optionCatalog: {} as AppConfig['optionCatalog'], accents: ['green', 'ocean', 'sunset', 'berry', 'mono'], menuReviewsVisibility: 'summary', menuHistoryDays: 7 });
+      setConfig((current) => current ?? { features: { links: true, contacts: true, menu: true, announcements: true, issues: true, kudos: false, polls: true, celebrations: true, feedback: true, whosin: true, vibes: true }, branding: DEFAULT_BRANDING, options: { showBookerNames: false, eventsRsvpEnabled: true, issuePhotosEnabled: true }, featureCatalog: {} as AppConfig['featureCatalog'], optionCatalog: {} as AppConfig['optionCatalog'], accents: ['green', 'ocean', 'sunset', 'berry', 'mono'], menuReviewsVisibility: 'summary', menuHistoryDays: 7, permissionCatalog: { groups: [], adminDefaults: [] }, notificationCatalog: { channels: [], types: [] } });
     });
     // Any response that reports a newer settings version, and the periodic pulse, both end up here.
     const noticed = (version: number) => { if (knownVersion.current > 0 && version !== knownVersion.current) void reloadBootstrap().catch(() => {}); };
     onConfigVersion(noticed);
-    const stopPulse = startPulse({ onPulse: (reply) => noticed(reply.configVersion) });
+    // The bell's unread count rides on the pulse that is already running: no extra request.
+    const stopPulse = startPulse({ onPulse: (reply) => {
+      noticed(reply.configVersion);
+      const count = (reply.notifications as { unread?: number } | undefined)?.unread;
+      if (typeof count === 'number') setUnread(count);
+    } });
     return () => { onConfigVersion(null); stopPulse(); };
   }, [ready, reloadBootstrap]);
 
@@ -175,6 +191,8 @@ function Shell() {
     setTeams([]);
     setConfig(null);
     setConfigVersion(0);
+    setUnread(0);
+    setBellOpen(false);
     setUser(null);
   }, []);
 
@@ -188,9 +206,12 @@ function Shell() {
     const params = new URLSearchParams(location.search);
     const token = params.get('token');
     const resourceId = params.get('resource');
+    const reportId = params.get('report');
     const stay = params.get('stay') ?? undefined;
-    if (!token && !resourceId) return;
+    if (!token && !resourceId && !reportId) return;
     history.replaceState(null, '', location.pathname);
+    // A "report a problem" sticker (?report=<seat or room>) opens the issue form already pointing at that place.
+    if (reportId) { setIssueFocus({ resourceId: reportId }); setScreen('issues'); return; }
     if (resourceId) { setIntent({ resourceId, token: token ?? undefined, stay }); setScreen('book'); }
     else toast('That booking QR is missing its space. Ask an admin for a new one.', 'error');
   }, [toast]);
@@ -199,7 +220,15 @@ function Shell() {
 
   const go = useCallback((next: Screen) => { setScreen(next); window.scrollTo({ top: 0, behavior: 'smooth' }); }, []);
   const clearIntent = useCallback(() => setIntent(null), []);
+  const clearIssueFocus = useCallback(() => setIssueFocus(null), []);
   const startBooking = useCallback((next: QrIntent | { kind: 'desk' | 'room' }) => { setIntent(next); setScreen('book'); window.scrollTo({ top: 0 }); }, []);
+  const openIssue = useCallback((id: string) => { setIssueFocus({ issueId: id }); setScreen('issues'); window.scrollTo({ top: 0 }); }, []);
+  const openNotificationLink = useCallback((link: string) => {
+    if (link.startsWith('issue:')) return openIssue(link.slice(6));
+    if (link === 'issues') return go('issues');
+    if (link === 'ideas') { navHandoff.manageTab = 'community'; return go('manage'); }
+    return go('home');
+  }, [openIssue, go]);
 
   async function signOut() {
     try { await api('/logout', { method: 'POST' }); } catch (reason) { if (!(reason instanceof ApiError) || reason.status !== 401) toast(messageOf(reason), 'error'); }
@@ -209,9 +238,9 @@ function Shell() {
 
   const ctx: Ctx | null = useMemo(
     () => (user && ready && config
-      ? { user, config, configVersion, flag: (key: FeatureKey) => config.features[key] !== false, reloadConfig: reloadBootstrap, getSummary, invalidateSummary, updateUser: setUser, plan, planLoading, teams, unassignedSeats, mapInfo, reloadTeams: reloadBootstrap, reloadMap: reloadBootstrap, reloadPlan, go, startBooking }
+      ? { user, config, configVersion, flag: (key: FeatureKey) => config.features[key] !== false, reloadConfig: reloadBootstrap, getSummary, invalidateSummary, updateUser: setUser, plan, planLoading, teams, unassignedSeats, mapInfo, reloadTeams: reloadBootstrap, reloadMap: reloadBootstrap, reloadPlan, go, startBooking, openIssue }
       : null),
-    [user, ready, config, configVersion, plan, planLoading, teams, unassignedSeats, mapInfo, reloadBootstrap, getSummary, invalidateSummary, reloadPlan, go, startBooking],
+    [user, ready, config, configVersion, plan, planLoading, teams, unassignedSeats, mapInfo, reloadBootstrap, getSummary, invalidateSummary, reloadPlan, go, startBooking, openIssue],
   );
 
   if (booting) return <div className="boot"><Spinner label="Warming up" /></div>;
@@ -219,22 +248,36 @@ function Shell() {
   if (user.mustChangePassword) return <AccountScreen user={user} forced onChanged={() => setUser({ ...user, mustChangePassword: false })} onSignOut={signOut} />;
   if (!ctx) return <div className="boot"><Spinner label="Getting things ready" /></div>;
 
-  const manager = user.permissions.length > 0;
+  const manager = manageTabs(user).length > 0;
   const flag = ctx.flag;
   const hasCommunity = flag('kudos') || flag('polls') || flag('celebrations') || flag('feedback');
   const hasUseful = flag('links') || flag('contacts');
-  const nav: NavItem[] = [
+  const hasIssues = flag('issues');
+  // Hands-on teams get a short list: their tasks, reporting, scanning, contacts and the menu.
+  const simple = user.simpleUi;
+  const nav: NavItem[] = simple ? [
+    ['home', 'Home', 'tasks'],
+    ...(hasIssues ? [['issues', 'Tasks and reports', 'wrench'] as NavItem] : []),
+    ['scan', 'Scan QR', 'scan'],
+    ...(hasUseful ? [['useful', 'Contacts', 'phone'] as NavItem] : []),
+    ...(flag('menu') ? [['menu', 'Food menu', 'utensils'] as NavItem] : []),
+  ] : [
     ['home', 'Home', 'home'], ['book', 'Book', 'desk'], ['bookings', 'My bookings', 'ticket'], ['events', 'Events', 'party'],
+    ...(hasIssues ? [['issues', 'Report a problem', 'wrench'] as NavItem] : []),
     ...(flag('menu') ? [['menu', 'Food menu', 'utensils'] as NavItem] : []),
     ...(hasCommunity ? [['community', 'Community', 'heart'] as NavItem] : []),
     ...(hasUseful ? [['useful', 'Useful stuff', 'link'] as NavItem] : []),
     ['scan', 'Scan QR', 'scan'],
     ...(manager ? [['manage', 'Manage', 'shield'] as NavItem] : []),
   ];
-  const mobileNav: NavItem[] = [
+  const mobileNav: NavItem[] = simple ? ([
+    ['home', 'Home', 'tasks'], ...(hasIssues ? [['issues', 'Report', 'wrench'] as NavItem] : []), ['scan', 'Scan', 'scan'],
+    ...(hasUseful ? [['useful', 'Contacts', 'phone'] as NavItem] : []), ...(flag('menu') ? [['menu', 'Menu', 'utensils'] as NavItem] : []),
+  ] as NavItem[]).slice(0, 5) : [
     ['home', 'Home', 'home'], ['book', 'Book', 'desk'], ['events', 'Events', 'party'],
-    hasCommunity ? ['community', 'Community', 'heart'] : ['bookings', 'Trips', 'ticket'], ['more', 'More', 'grid'],
+    hasIssues ? ['issues', 'Report', 'wrench'] : hasCommunity ? ['community', 'Community', 'heart'] : ['bookings', 'Trips', 'ticket'], ['more', 'More', 'grid'],
   ];
+  const allowed = (id: Screen) => id === 'account' || id === 'more' || nav.some(([item]) => item === id);
   const brandParts = branding.appName.trim().split(' ');
   const brandLast = brandParts.length > 1 ? brandParts.pop() : '';
   const brand = <span>{brandParts.join(' ')}{brandLast ? <> <b>{brandLast}</b></> : null}</span>;
@@ -245,7 +288,10 @@ function Shell() {
     <div className="app-shell">
       <a className="skip-link" href="#main">Skip to content</a>
       <aside className="sidebar">
-        <div className="brand"><span className="brand-mark"><Icon name="sparkle" size={20} /></span>{brand}</div>
+        <div className="sidebar-top">
+          <div className="brand"><span className="brand-mark"><Icon name="sparkle" size={20} /></span>{brand}</div>
+          <NotificationBell unread={unread} onClick={() => setBellOpen(true)} />
+        </div>
         <nav aria-label="Primary">
           {nav.map(([id, label, icon]) => (
             <button key={id} className={`nav-item ${screen === id ? 'active' : ''}`} onClick={() => go(id)} aria-current={screen === id ? 'page' : undefined}>
@@ -264,6 +310,7 @@ function Shell() {
           <div className="brand compact"><span className="brand-mark"><Icon name="sparkle" size={18} /></span>{brand}</div>
           <div className="topbar-right">
             {!online && <span className="pill pill-warn">Offline</span>}
+            <NotificationBell unread={unread} onClick={() => setBellOpen(true)} />
             <button className="icon-avatar" onClick={() => go('account')} aria-label="Account settings"><Avatar name={user.name} emoji={user.avatar} size={36} /></button>
           </div>
         </header>
@@ -274,19 +321,25 @@ function Shell() {
           </div>
         )}
         <main id="main" key={screen} className="screen">
-          {screen === 'home' && <HomeScreen ctx={ctx} />}
-          {screen === 'book' && <BookScreen ctx={ctx} intent={intent} clearIntent={clearIntent} online={online} />}
-          {screen === 'bookings' && <BookingsScreen ctx={ctx} />}
-          {screen === 'events' && <EventsScreen ctx={ctx} />}
-          {screen === 'scan' && <ScanScreen ctx={ctx} onResolved={(next) => { setIntent(next); setScreen('book'); }} />}
+          {screen === 'home' && (simple ? <StaffHome ctx={ctx} /> : <HomeScreen ctx={ctx} />)}
+          {screen === 'issues' && hasIssues && allowed('issues') && <IssuesScreen ctx={ctx} focus={issueFocus} clearFocus={clearIssueFocus} />}
+          {screen === 'book' && !simple && <BookScreen ctx={ctx} intent={intent} clearIntent={clearIntent} online={online} />}
+          {screen === 'bookings' && !simple && <BookingsScreen ctx={ctx} />}
+          {screen === 'events' && !simple && <EventsScreen ctx={ctx} />}
+          {screen === 'scan' && <ScanScreen ctx={ctx} onResolved={(next) => {
+            if (next.report) { setIssueFocus({ resourceId: next.resourceId }); setScreen('issues'); return; }
+            if (simple) { toast('Use “Report a problem” for this sticker.', 'info'); return; }
+            setIntent(next); setScreen('book');
+          }} />}
           {screen === 'menu' && flag('menu') && <MenuScreen ctx={ctx} />}
-          {screen === 'community' && hasCommunity && <CommunityScreen ctx={ctx} />}
+          {screen === 'community' && hasCommunity && !simple && <CommunityScreen ctx={ctx} />}
           {screen === 'useful' && hasUseful && <UsefulScreen ctx={ctx} />}
-          {screen === 'more' && <MoreScreen ctx={ctx} items={nav.filter(([id]) => id !== 'home')} onSignOut={signOut} />}
-          {screen === 'manage' && manager && <ManageScreen ctx={ctx} />}
+          {screen === 'more' && !simple && <MoreScreen ctx={ctx} items={nav.filter(([id]) => id !== 'home')} onSignOut={signOut} />}
+          {screen === 'manage' && manager && !simple && <ManageScreen ctx={ctx} />}
           {screen === 'account' && <AccountScreen ctx={ctx} onChanged={() => toast('Password updated. Nicely done.', 'success')} onSignOut={signOut} />}
         </main>
       </div>
+      {bellOpen && <NotificationSheet onClose={() => setBellOpen(false)} onOpenLink={openNotificationLink} onUnread={setUnread} onSettings={() => go('account')} />}
       <nav className="bottom-nav" aria-label="Primary mobile">
         {mobileNav.map(([id, label, icon]) => (
           <button key={id} className={`bottom-item ${mobileActive(id) ? 'active' : ''}`} onClick={() => go(id)} aria-current={screen === id ? 'page' : undefined}>
@@ -310,7 +363,7 @@ function LoginScreen({ branding, onSignedIn }: { branding: Branding; onSignedIn:
     setBusy(true);
     setError('');
     try {
-      const result = await api<{ user: User; csrfToken: string }>('/login', { method: 'POST', body: { email, password } });
+      const result = await api<{ user: User; csrfToken: string }>('/login', { method: 'POST', body: { login: email.trim(), password } });
       setCsrf(result.csrfToken);
       onSignedIn(result.user);
     } catch (reason) {
@@ -336,7 +389,7 @@ function LoginScreen({ branding, onSignedIn }: { branding: Branding; onSignedIn:
       <form className="login-card" onSubmit={submit}>
         <h2>Welcome back</h2>
         <p className="muted">Sign in to {branding.appName}.</p>
-        <Field label="Email"><input type="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} required autoFocus placeholder="you@company.com" /></Field>
+        <Field label="Email or username"><input type="text" inputMode="email" autoCapitalize="off" autoCorrect="off" spellCheck={false} autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} required autoFocus placeholder="you@company.com or your employee ID" maxLength={200} /></Field>
         <Field label="Password"><input type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required /></Field>
         {error && <div className="form-error" role="alert">{error}</div>}
         <button className="button button-primary button-block" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'} <Icon name="arrow" size={18} /></button>
@@ -347,8 +400,11 @@ function LoginScreen({ branding, onSignedIn }: { branding: Branding; onSignedIn:
               <button type="button" className="chip" onClick={() => fill('ava@demo.gcc')}>Employee</button>
               <button type="button" className="chip" onClick={() => fill('noah@demo.gcc')}>Admin</button>
               <button type="button" className="chip" onClick={() => fill('root@demo.gcc')}>Super admin</button>
+              <button type="button" className="chip" onClick={() => fill('meera@demo.gcc')}>Facility manager</button>
+              <button type="button" className="chip" onClick={() => fill('ravi@demo.gcc')}>Facility staff</button>
+              <button type="button" className="chip" onClick={() => fill('emp-1001')}>Staff (employee ID)</button>
             </div>
-            <small>Password for all three: <code>gccdemo</code></small>
+            <small>Password for all of them: <code>gccdemo</code></small>
           </div>
         )}
       </form>

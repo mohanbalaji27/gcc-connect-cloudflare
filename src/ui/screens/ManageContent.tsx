@@ -3,15 +3,24 @@ import type { Announcement, ContactItem, LinkItem } from '../../lib/types';
 import { api, messageOf } from '../../lib/api';
 import { inIndia } from '../../lib/format';
 import { normalizeUrl, urlProblem } from '../../lib/url';
+import type { Ctx } from '../App';
 import { Empty, Field, Icon, Modal, Spinner, Switch, Tabs, UrlInput, useKit } from '../kit';
 
 type Sub = 'links' | 'contacts' | 'news';
 
-export function ManageContent() {
-  const [sub, setSub] = useState<Sub>('links');
+// Links, contacts and announcements each have their own permission, so a person sees only the parts they may change.
+export function ManageContent({ ctx }: { ctx: Ctx }) {
+  const can = (permission: string) => ctx.user.permissions.includes(permission);
+  const tabs = [
+    ...(can('content.links') ? [{ id: 'links' as Sub, label: 'Links', icon: 'link' }] : []),
+    ...(can('content.contacts') ? [{ id: 'contacts' as Sub, label: 'Contacts', icon: 'phone' }] : []),
+    ...(can('content.announcements') ? [{ id: 'news' as Sub, label: 'Announcements', icon: 'megaphone' }] : []),
+  ];
+  const [chosen, setSub] = useState<Sub>(tabs[0]?.id ?? 'links');
+  const sub = tabs.some((tab) => tab.id === chosen) ? chosen : tabs[0]?.id;
   return (
     <div>
-      <Tabs tabs={[{ id: 'links' as Sub, label: 'Links', icon: 'link' }, { id: 'contacts' as Sub, label: 'Contacts', icon: 'phone' }, { id: 'news' as Sub, label: 'Announcements', icon: 'megaphone' }]} value={sub} onChange={setSub} />
+      <Tabs tabs={tabs} value={sub ?? 'links'} onChange={setSub} />
       {sub === 'links' && <Links />}
       {sub === 'contacts' && <Contacts />}
       {sub === 'news' && <News />}
@@ -166,6 +175,7 @@ function NewsForm({ item, onClose, onSaved }: { item: Announcement | null; onClo
   const [body, setBody] = useState(item?.body ?? '');
   const [emoji, setEmoji] = useState(item?.emoji ?? '📣');
   const [pinned, setPinned] = useState(item?.pinned ?? false);
+  const [notify, setNotify] = useState(false);
   const [expires, setExpires] = useState(item?.expires_at ? new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date(item.expires_at)) : '');
   const [error, setError] = useState('');
   async function submit(event: React.FormEvent) {
@@ -173,7 +183,7 @@ function NewsForm({ item, onClose, onSaved }: { item: Announcement | null; onClo
     setError('');
     try {
       const payload = { title, body, emoji, pinned, expiresAt: expires ? new Date(`${expires}T23:59:00+05:30`).toISOString() : null };
-      if (item) await api(`/admin/announcements/${item.id}`, { method: 'PATCH', body: payload }); else await api('/admin/announcements', { method: 'POST', body: payload });
+      if (item) await api(`/admin/announcements/${item.id}`, { method: 'PATCH', body: payload }); else await api('/admin/announcements', { method: 'POST', body: { ...payload, notify } });
       onSaved();
     } catch (reason) { setError(messageOf(reason)); }
   }
@@ -185,6 +195,7 @@ function NewsForm({ item, onClose, onSaved }: { item: Announcement | null; onClo
         <div className="span-2"><Field label="Message" hint={`${body.length}/600`}><textarea rows={3} value={body} onChange={(e) => setBody(e.target.value)} maxLength={600} /></Field></div>
         <Field label="Hide after (optional)"><input type="date" value={expires} onChange={(e) => setExpires(e.target.value)} /></Field>
         <div className="switch-row"><div><strong>Pin to the top</strong></div><Switch checked={pinned} onChange={setPinned} label="Pin to the top" /></div>
+        {!item && <div className="switch-row span-2"><div><strong>Also send a notification</strong><small>Rings the bell for everyone who has not switched announcements off.</small></div><Switch checked={notify} onChange={setNotify} label="Also send a notification" /></div>}
         {error && <div className="form-error span-2" role="alert">{error}</div>}
         <div className="modal-actions span-2"><button type="button" className="button" onClick={onClose}>Cancel</button><button className="button button-primary">Publish</button></div>
       </form>

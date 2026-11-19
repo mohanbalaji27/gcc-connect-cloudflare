@@ -1,12 +1,20 @@
 ﻿import type { ReviewVisibility } from './menuCatalog';
 
 export type Role = 'user' | 'admin' | 'super_admin';
-export type Permission = 'bookings.manage' | 'events.manage' | 'spaces.manage' | 'teams.manage' | 'qr.manage' | 'users.manage' | 'content.manage' | 'menu.manage' | 'menu.reviews.view' | 'community.manage' | 'insights.view';
+// Permissions come from the server's catalogue (config.permissionCatalog); the browser keeps no list of its own.
+export type Permission = string;
+export interface PermissionInfo { id: string; label: string; description: string; grant: 'any' | 'super' | 'reserved' }
+export interface PermissionGroup { id: string; label: string; icon: string; permissions: PermissionInfo[] }
+export interface PermissionCatalog { groups: PermissionGroup[]; adminDefaults: Permission[] }
+export interface NotificationType { id: string; label: string; description: string; group: string; requires: Permission | null; default: boolean }
+export interface NotificationChannel { id: string; label: string; available: boolean; comingSoon?: boolean }
+export interface NotificationCatalog { channels: NotificationChannel[]; types: NotificationType[] }
 
 export interface User {
   id: string; email: string; name: string; team: string; role: Role;
   permissions: Permission[]; mustChangePassword: boolean;
   avatar: string; roleName: string | null; showInWhosin: boolean; birthMonth: number | null; birthDay: number | null;
+  username: string | null; simpleUi: boolean; landing: string;
 }
 export interface Team { id: string; name: string; color: string; seatCount: number }
 export interface TeamRef { id: string; name: string; color: string }
@@ -30,7 +38,7 @@ export interface OfficeEvent {
 }
 export interface Summary { streak: number; monthCount: number; totalVisits: number; desksTotal: number; desksLeftToday: number }
 export interface ManagedUser {
-  id: string; email: string; name: string; team: string; role: Role; active: boolean; permissions: Permission[];
+  id: string; email: string; username: string | null; name: string; team: string; role: Role; active: boolean; permissions: Permission[];
   ownPermissions: Permission[]; customRoleId: string | null; joinedOn: string;
 }
 export interface MapInfo { calibration: { x0: number; y0: number; x1: number; y1: number }; floorPlanAvailable: boolean; floorPlanVersion: number }
@@ -40,31 +48,18 @@ export interface TokenRow {
 }
 export interface AuditEntry { id: string; action: string; entity_id: string | null; detail: string; created_at: string; actor_name: string | null }
 
-export const PERMISSION_LABELS: Record<Permission, string> = {
-  'bookings.manage': 'See and cancel anyone’s bookings',
-  'events.manage': 'Create, edit and delete events',
-  'spaces.manage': 'Add, edit, move and retire desks and rooms',
-  'teams.manage': 'Create teams and assign seats to them',
-  'qr.manage': 'Create booking QR codes',
-  'users.manage': 'Create users, set roles and permissions',
-  'content.manage': 'Manage links, contacts and announcements',
-  'menu.manage': 'Manage the food menu',
-  'menu.reviews.view': 'Read food menu reviews and comments',
-  'community.manage': 'Run polls, moderate kudos, read feedback',
-  'insights.view': 'See the insights dashboard',
-};
-export const ALL_PERMISSIONS = Object.keys(PERMISSION_LABELS) as Permission[];
 export const EVENT_CATEGORIES = ['Learning', 'Community', 'Company', 'Social', 'Wellness', 'Team'];
 
-export type FeatureKey = 'links' | 'contacts' | 'menu' | 'announcements' | 'kudos' | 'polls' | 'celebrations' | 'feedback' | 'whosin' | 'vibes';
+export type FeatureKey = 'links' | 'contacts' | 'menu' | 'announcements' | 'issues' | 'kudos' | 'polls' | 'celebrations' | 'feedback' | 'whosin' | 'vibes';
 export interface Branding { appName: string; tagline: string; accent: string; welcome: string }
-export type OptionKey = 'showBookerNames' | 'eventsRsvpEnabled';
+export type OptionKey = 'showBookerNames' | 'eventsRsvpEnabled' | 'issuePhotosEnabled';
 export interface AppConfig {
   features: Record<FeatureKey, boolean>; branding: Branding; options: Record<OptionKey, boolean>; featureCatalog: Record<FeatureKey, string>; optionCatalog: Record<OptionKey, string>; accents: string[];
   menuReviewsVisibility: ReviewVisibility; menuHistoryDays: number;
+  permissionCatalog: PermissionCatalog; notificationCatalog: NotificationCatalog;
 }
 export interface Bootstrap {
-  configVersion: number; user: User; config: AppConfig; teams: Team[]; unassignedSeats: number; map: MapInfo; summary: Summary;
+  configVersion: number; user: User; config: AppConfig; teams: Team[]; unassignedSeats: number; map: MapInfo; summary: Summary; unread: number;
 }
 export interface LinkItem { id: string; title: string; url: string; description: string; category: string; emoji: string; sort_order: number }
 export interface ContactItem { id: string; name: string; role_title: string; category: string; phone: string; email: string; hours: string; notes: string; emoji: string; sort_order: number }
@@ -80,7 +75,24 @@ export interface Vibes {
   next: { name: string; emoji: string; remaining: number; progress: number } | null;
   badges: { id: string; emoji: string; name: string; hint: string; earned: boolean }[];
 }
-export interface CustomRole { id: string; name: string; description: string; emoji: string; permissions: Permission[]; people?: number }
+export interface NotifyDefaults { types?: Record<string, { inapp?: boolean }>; categories?: string[] }
+export interface CustomRole {
+  id: string; name: string; description: string; emoji: string; permissions: Permission[]; people?: number;
+  systemKey?: string | null; simpleUi?: boolean; landing?: string; notifyDefaults?: NotifyDefaults;
+}
+export type IssueStatus = 'new' | 'acknowledged' | 'in_progress' | 'waiting' | 'resolved' | 'closed';
+export type IssuePriority = 'low' | 'normal' | 'high' | 'urgent';
+export interface IssueCategory { id: string; name: string; emoji: string; description: string; defaultPriority: IssuePriority }
+export interface Issue {
+  id: string; number: number; title: string; description: string; categoryId: string; categoryName: string; categoryEmoji: string;
+  locationText: string; resourceId: string | null; priority: IssuePriority; status: IssueStatus; reporterId: string; reporterName?: string;
+  assigneeId: string | null; assigneeName: string | null; createdAt: string; updatedAt: string; resolvedAt: string | null;
+  plusOnes: number; overdue: boolean; photoVersion: number | null; mine: boolean;
+}
+export interface IssueUpdate { id: string; kind: 'comment' | 'status' | 'assign' | 'priority' | 'reopen' | 'help'; body: string; internal: boolean; from: string | null; to: string | null; createdAt: string; authorId: string | null; authorName: string | null }
+export interface IssueDetail { issue: Issue; updates: IssueUpdate[]; can: { reopen: boolean; work: boolean; assign: boolean; comment: boolean; internalNote: boolean; photo: boolean } }
+export interface IssueCounts { open: number; new: number; unassigned: number; mine: number; overdue: number }
+export interface AppNotification { id: string; type: string; title: string; body: string; link: string; data: Record<string, unknown>; createdAt: string; readAt: string | null }
 export interface FeedbackItem { id: string; category: string; message: string; status: 'new' | 'seen' | 'done'; created_at: string; from_name: string | null }
 export interface Insights {
   today: string;

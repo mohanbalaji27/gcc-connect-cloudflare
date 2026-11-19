@@ -4,6 +4,8 @@ import m002 from '../server/migrations/002-app-files.sql';
 import m003 from '../server/migrations/003-features.sql';
 import m004 from '../server/migrations/004-availability-labels.sql';
 import m005 from '../server/migrations/005-menu-v2.sql';
+import m006 from '../server/migrations/006-permissions-roles.sql';
+import m007 from '../server/migrations/007-issues-notifications.sql';
 
 export const MIGRATIONS = [
   { version: 1, sql: m001 },
@@ -11,4 +13,6 @@ export const MIGRATIONS = [
   { version: 3, sql: m003 },
   { version: 4, sql: m004 },
   { version: 5, sql: m005 },
+  { version: 6, sql: m006 },
+  { version: 7, sql: m007 },
 ];

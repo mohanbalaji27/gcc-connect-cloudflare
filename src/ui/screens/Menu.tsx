@@ -47,7 +47,7 @@ export function MenuScreen({ ctx }: { ctx: Ctx }) {
   const [written, setWritten] = useState<Record<string, { restricted: boolean; reviews: WrittenReview[] } | 'loading'>>({});
   const strip = useRef<HTMLDivElement>(null);
   const touch = useRef<{ x: number; y: number } | null>(null);
-  const canManage = ctx.user.permissions.includes('menu.manage');
+  const canManage = ctx.user.permissions.includes('menu.edit');
   const appName = ctx.config.branding.appName;
 
   useEffect(() => {
