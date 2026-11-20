@@ -83,7 +83,7 @@ export interface SettingsSchema {
   sections: { id: string; label: string; icon: string; blurb: string }[]; settings: SettingDef[];
   homeCards: { id: HomeCardId; label: string; hint: string }[]; themeFields: string[];
 }
-export type OptionKey = 'showBookerNames' | 'eventsRsvpEnabled' | 'issuePhotosEnabled' | 'homeContacts' | 'usageAnalytics';
+export type OptionKey = 'showBookerNames' | 'eventsRsvpEnabled' | 'issuePhotosEnabled' | 'homeContacts' | 'usageAnalytics' | 'pushNotificationsEnabled';
 export interface AppConfig {
   features: Record<FeatureKey, boolean>; branding: Branding; login: LoginConfig; home: HomeConfig; logo: LogoMeta;
   /** Every scalar setting by its key (see server/settings-registry.js). */
@@ -126,7 +126,7 @@ export interface Issue {
 }
 export interface IssueUpdate { id: string; kind: 'comment' | 'status' | 'assign' | 'priority' | 'reopen' | 'help'; body: string; internal: boolean; from: string | null; to: string | null; createdAt: string; authorId: string | null; authorName: string | null }
 export interface IssueDetail { issue: Issue; updates: IssueUpdate[]; can: { reopen: boolean; work: boolean; assign: boolean; comment: boolean; internalNote: boolean; photo: boolean } }
-export interface IssueCounts { open: number; new: number; unassigned: number; mine: number; overdue: number }
+export interface IssueCounts { open: number; new: number; unassigned: number; mine: number; overdue: number; closed?: number }
 export interface AppNotification { id: string; type: string; title: string; body: string; link: string; data: Record<string, unknown>; createdAt: string; readAt: string | null }
 export interface FeedbackItem { id: string; category: string; message: string; status: 'new' | 'seen' | 'done'; created_at: string; from_name: string | null }
 export interface Insights {

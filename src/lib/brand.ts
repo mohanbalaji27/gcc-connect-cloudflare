@@ -17,7 +17,7 @@ export const NO_LOGO: LogoMeta = { v: '', slots: [], bg: null };
 export const fallbackConfig = (): AppConfig => ({
   features: { links: true, contacts: true, menu: true, announcements: true, issues: true, kudos: false, polls: true, celebrations: true, feedback: true, whosin: true, vibes: true },
   branding: DEFAULT_BRANDING, login: DEFAULT_LOGIN, home: DEFAULT_HOME, logo: NO_LOGO, settings: {},
-  options: { showBookerNames: false, eventsRsvpEnabled: true, issuePhotosEnabled: true, homeContacts: true, usageAnalytics: true },
+  options: { showBookerNames: false, eventsRsvpEnabled: true, issuePhotosEnabled: true, homeContacts: true, usageAnalytics: true, pushNotificationsEnabled: true },
   featureCatalog: {} as AppConfig['featureCatalog'], optionCatalog: {} as AppConfig['optionCatalog'], accents: [],
   menuReviewsVisibility: 'summary', menuHistoryDays: 7, usageRetentionDays: 400, homeContactsCount: 4,
   permissionCatalog: { groups: [], adminDefaults: [] }, notificationCatalog: { channels: [], types: [] },

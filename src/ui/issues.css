@@ -192,9 +192,14 @@
 .pref-row:first-child { border-top: 0; }
 .pref-row > span { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .pref-row small { color: var(--ink-soft); }
-.pref-row input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--green); flex: none; }
+.pref-row input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--green); flex: none; cursor: pointer; }
 .pref-head { display: flex; gap: 12px; font-size: .74rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-faint); padding-bottom: 6px; }
 .pref-head span:first-child { flex: 1; }
+.pref-col-head { width: 64px; text-align: center; flex: none; }
+.pref-check-wrap { width: 64px; display: flex; justify-content: center; align-items: center; flex: none; }
+.device-push-banner { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 16px; border-radius: 14px; background: var(--inset); border: 1px solid var(--line); margin-bottom: 8px; flex-wrap: wrap; }
+.device-push-banner .push-info { flex: 1; min-width: 220px; }
+.device-push-banner .push-info p { margin: 4px 0 0; }
 .route-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
 .route-box { border: 1px solid var(--line); border-radius: 14px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
 .route-box h4 { margin: 0; font-size: .9rem; }

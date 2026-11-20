@@ -342,13 +342,14 @@ function IssueQueue({ ctx, onOpen }: { ctx: Ctx; onOpen: (id: string) => void })
           <button className={`iss-count ${filters.assignee === 'none' ? 'on' : ''}`} onClick={() => quick({ assignee: 'none' })}><strong>{counts.unassigned}</strong><span>Unassigned</span></button>
           <button className={`iss-count ${filters.assignee === 'me' ? 'on' : ''}`} onClick={() => quick({ assignee: 'me' })}><strong>{counts.mine}</strong><span>Mine</span></button>
           <button className={`iss-count warn ${filters.overdue ? 'on' : ''}`} onClick={() => quick({ overdue: true })}><strong>{counts.overdue}</strong><span>Overdue</span></button>
+          <button className={`iss-count ${filters.status === 'resolved,closed' ? 'on' : ''}`} onClick={() => quick({ status: 'resolved,closed' })}><strong>{counts.closed ?? 0}</strong><span>Closed</span></button>
         </div>
       )}
       <section className="panel tight iss-filters">
         <div className="input-icon"><Icon name="search" size={18} /><input value={filters.q} onChange={(event) => set({ q: event.target.value })} placeholder="Search text, place or #number" aria-label="Search issues" /></div>
         <div className="iss-filter-grid">
           <select value={filters.status} onChange={(event) => set({ status: event.target.value })} aria-label="Status">
-            <option value="open">Open</option><option value="any">Any status</option>{(Object.keys(STATUS_LABEL) as (keyof typeof STATUS_LABEL)[]).map((status) => <option key={status} value={status}>{STATUS_LABEL[status]}</option>)}
+            <option value="open">Open</option><option value="resolved,closed">Closed & Resolved</option><option value="any">Any status</option>{(Object.keys(STATUS_LABEL) as (keyof typeof STATUS_LABEL)[]).map((status) => <option key={status} value={status}>{STATUS_LABEL[status]}</option>)}
           </select>
           <select value={filters.categoryId} onChange={(event) => set({ categoryId: event.target.value })} aria-label="Category"><option value="">All categories</option>{categories.map((item) => <option key={item.id} value={item.id}>{item.emoji} {item.name}</option>)}</select>
           <select value={filters.priority} onChange={(event) => set({ priority: event.target.value })} aria-label="Priority"><option value="">Any priority</option>{(['urgent', 'high', 'normal', 'low'] as IssuePriority[]).map((level) => <option key={level} value={level}>{PRIORITY_LABEL[level]}</option>)}</select>

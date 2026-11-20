@@ -177,8 +177,8 @@ export function registerFeatures({ app, db, requireAuth, requireSignedIn, requir
   };
 
   app.get('/api/links', requireAuth, feature('links'), async (_req, res) => {
-    const { rows } = await db.query('SELECT id, title, url, description, category, emoji, sort_order FROM links ORDER BY category, sort_order, title LIMIT 300');
-    res.json({ links: rows });
+    const { rows } = await db.query('SELECT id, title, url, description, category, emoji, sort_order, now() AS read_at FROM links ORDER BY category, sort_order, title LIMIT 300');
+    res.json({ links: rows.map(({ read_at, ...row }) => row) });
   });
   app.post('/api/admin/links', requirePermission('content.links'), requireCsrf, async (req, res) => {
     const id = id8('link');
@@ -230,8 +230,8 @@ export function registerFeatures({ app, db, requireAuth, requireSignedIn, requir
     return (await db.query(`SELECT ${columns}, now() AS read_at FROM contacts WHERE category ILIKE 'emergency' ORDER BY sort_order, name LIMIT $1`, [size])).rows.map(({ read_at, ...row }) => row);
   };
   app.get('/api/contacts', requireAuth, feature('contacts'), async (_req, res) => {
-    const { rows } = await db.query('SELECT id, name, role_title, category, phone, email, hours, notes, emoji, sort_order, pin_to_home FROM contacts ORDER BY category, sort_order, name LIMIT 300');
-    res.json({ contacts: rows });
+    const { rows } = await db.query('SELECT id, name, role_title, category, phone, email, hours, notes, emoji, sort_order, pin_to_home, now() AS read_at FROM contacts ORDER BY category, sort_order, name LIMIT 300');
+    res.json({ contacts: rows.map(({ read_at, ...row }) => row) });
   });
   app.post('/api/admin/contacts', requirePermission('content.contacts'), requireCsrf, async (req, res) => {
     const id = id8('contact');
@@ -277,9 +277,9 @@ export function registerFeatures({ app, db, requireAuth, requireSignedIn, requir
   };
   app.get('/api/announcements', requireAuth, feature('announcements'), async (req, res) => {
     const all = req.query.all === '1' && req.user.permissions.includes('content.announcements');
-    const { rows } = await db.query(`SELECT id, title, body, emoji, pinned, expires_at, created_at FROM announcements
+    const { rows } = await db.query(`SELECT id, title, body, emoji, pinned, expires_at, created_at, now() AS read_at FROM announcements
       ${all ? '' : 'WHERE expires_at IS NULL OR expires_at > now()'} ORDER BY pinned DESC, created_at DESC LIMIT 30`);
-    res.json({ announcements: rows });
+    res.json({ announcements: rows.map(({ read_at, ...row }) => row) });
   });
   app.post('/api/admin/announcements', requirePermission('content.announcements'), requireCsrf, async (req, res) => {
     const id = id8('news');
@@ -544,7 +544,7 @@ export function registerFeatures({ app, db, requireAuth, requireSignedIn, requir
   });
   app.get('/api/admin/roles', requireSuper, async (_req, res) => {
     const { rows } = await db.query(`SELECT r.id, r.name, r.description, r.emoji, r.permissions, r.system_key, r.simple_ui, r.landing, r.notify_defaults,
-      (SELECT COUNT(*)::int FROM employees e WHERE e.custom_role_id = r.id) AS people FROM custom_roles r ORDER BY (r.system_key IS NULL), r.name`);
+      (SELECT COUNT(*)::int FROM employees e WHERE e.custom_role_id = r.id) AS people, now() AS read_at FROM custom_roles r ORDER BY (r.system_key IS NULL), r.name`);
     res.json({ roles: rows.map(roleView) });
   });
   app.post('/api/admin/roles', requireSuper, requireCsrf, async (req, res) => {

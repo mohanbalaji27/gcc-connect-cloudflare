@@ -201,6 +201,9 @@ test('queue filters, counts, assignment rules and the CSV export', async () => {
   const queue = await json(call(manager, 'GET', '/issues?scope=all&status=open&categoryId=icat-it&assignee=none'));
   assert.ok(queue.issues.some((i) => i.id === id));
   assert.ok(queue.counts.open >= 1 && queue.counts.unassigned >= 1);
+  assert.ok(typeof queue.counts.closed === 'number', 'counts include closed issues count');
+  const closedQueue = await json(call(manager, 'GET', '/issues?scope=all&status=resolved,closed'));
+  assert.ok(Array.isArray(closedQueue.issues), 'can fetch closed and resolved issues');
   assert.equal((await json(call(manager, 'GET', '/issues?scope=all&q=display+is+blank'))).issues.some((i) => i.id === id), true);
   assert.equal((await json(call(manager, 'GET', '/issues?scope=all&priority=urgent&categoryId=icat-it'))).issues.length, 0);
   // Only people who can work on issues can be assigned; the reporter cannot assign.
@@ -349,9 +352,10 @@ test('notification preferences: role defaults, personal overrides, category aler
   // Switching a type off wins over the role default; resetting (null) brings the role default back.
   const managerPrefs = await json(call(manager, 'GET', '/me/notification-prefs'));
   assert.ok(managerPrefs.categories.every((c) => c.subscribed), 'facility managers follow every category by default');
-  assert.equal((await call(manager, 'PUT', '/me/notification-prefs', { types: { issue_new: { inapp: false } } })).status, 204);
+  assert.equal((await call(manager, 'PUT', '/me/notification-prefs', { types: { issue_new: { inapp: false, push: true } } })).status, 204);
   const quietManager = await json(call(manager, 'GET', '/me/notification-prefs'));
   assert.deepEqual(quietManager.types.find((t) => t.id === 'issue_new').inapp, { value: false, source: 'you' });
+  assert.deepEqual(quietManager.types.find((t) => t.id === 'issue_new').push, { value: true, source: 'you' });
   const countBefore = (await notificationsOf(manager)).length;
   await report(ava, { categoryId: 'icat-it', description: 'Wi-Fi drops' });
   assert.equal((await notificationsOf(manager)).length, countBefore, 'nothing new arrives for a switched-off type');
@@ -429,7 +433,7 @@ test('permissions: API serves the catalogue, accepts older strings and refuses r
   const config = await json(call(ava, 'GET', '/config'));
   assert.deepEqual(config.permissionCatalog.groups.flatMap((g) => g.permissions.map((p) => p.id)), ALL_PERMISSIONS);
   assert.ok(config.notificationCatalog.types.some((t) => t.id === 'issue_new'));
-  assert.equal(config.notificationCatalog.channels.find((c) => c.id === 'push').available, false, 'browser push is marked as coming soon');
+  assert.equal(config.notificationCatalog.channels.find((c) => c.id === 'push').available, true, 'browser push is available');
   assert.equal((await call(root, 'POST', '/admin/roles', { name: 'Sneaky', permissions: ['settings.manage'] })).status, 400);
   assert.equal((await call(root, 'POST', '/admin/roles', { name: 'Typo', permissions: ['issues.everything'] })).status, 400);
   const made = await call(root, 'POST', '/admin/roles', { name: 'Old school', permissions: ['community.manage'], simpleUi: true, landing: 'tasks', notifyDefaults: { types: { idea_new: { inapp: true } }, categories: ['icat-it'] } });

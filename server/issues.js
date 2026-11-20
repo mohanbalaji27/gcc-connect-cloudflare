@@ -222,6 +222,7 @@ export function registerIssues({ app, db, requireAuth, requireCsrf, requireAnyPe
     if (scope === 'all') {
       const status = typeof req.query.status === 'string' ? req.query.status : 'open';
       if (status === 'open') clauses.push(`i.status IN (${OPEN_SQL})`);
+      else if (status === 'closed' || status === 'resolved,closed') clauses.push("i.status IN ('resolved', 'closed')");
       else if (status !== 'any') {
         const list = status.split(',').filter((item) => ISSUE_STATUSES.includes(item));
         if (!list.length) throw fail(400, 'INVALID_INPUT', 'Choose a valid status.');
@@ -255,13 +256,14 @@ export function registerIssues({ app, db, requireAuth, requireCsrf, requireAnyPe
     const reply = { issues: rows.slice(0, size).map((row) => shape(row, req.user)), hasMore: rows.length > size };
     if (scope !== 'mine' && (scope === 'assigned' || has(req.user, 'issues.view_all'))) {
       const counts = (await db.query(
-        `SELECT COUNT(*) FILTER (WHERE i.status = 'new')::int AS new_count,
-                COUNT(*) FILTER (WHERE i.assignee_id IS NULL)::int AS unassigned,
-                COUNT(*) FILTER (WHERE i.assignee_id = $1)::int AS mine,
-                COUNT(*)::int AS open,
-                COUNT(*) FILTER (WHERE c.sla_hours IS NOT NULL AND now() > i.created_at + make_interval(hours => c.sla_hours))::int AS overdue
-         FROM issues i JOIN issue_categories c ON c.id = i.category_id WHERE i.status IN (${OPEN_SQL})`, [req.user.id])).rows[0];
-      reply.counts = { open: counts.open, new: counts.new_count, unassigned: has(req.user, 'issues.view_all') ? counts.unassigned : 0, mine: counts.mine, overdue: has(req.user, 'issues.view_all') ? counts.overdue : 0 };
+        `SELECT COUNT(*) FILTER (WHERE i.status = 'new' AND i.status IN (${OPEN_SQL}))::int AS new_count,
+                COUNT(*) FILTER (WHERE i.assignee_id IS NULL AND i.status IN (${OPEN_SQL}))::int AS unassigned,
+                COUNT(*) FILTER (WHERE i.assignee_id = $1 AND i.status IN (${OPEN_SQL}))::int AS mine,
+                COUNT(*) FILTER (WHERE i.status IN (${OPEN_SQL}))::int AS open,
+                COUNT(*) FILTER (WHERE i.status IN ('resolved', 'closed'))::int AS closed,
+                COUNT(*) FILTER (WHERE c.sla_hours IS NOT NULL AND i.status IN (${OPEN_SQL}) AND now() > i.created_at + make_interval(hours => c.sla_hours))::int AS overdue
+         FROM issues i JOIN issue_categories c ON c.id = i.category_id`, [req.user.id])).rows[0];
+      reply.counts = { open: counts.open, closed: counts.closed, new: counts.new_count, unassigned: has(req.user, 'issues.view_all') ? counts.unassigned : 0, mine: counts.mine, overdue: has(req.user, 'issues.view_all') ? counts.overdue : 0 };
     }
     res.json(reply);
   });

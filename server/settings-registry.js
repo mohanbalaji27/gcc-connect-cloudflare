@@ -42,8 +42,9 @@ export const OPTION_KEYS = {
   issuePhotosEnabled: 'Let people attach one small photo to an issue report',
   homeContacts: 'Show an Important contacts card on Home',
   usageAnalytics: 'Count which screens people open (usage analytics)',
+  pushNotificationsEnabled: 'Let people receive push notifications on mobile and desktop',
 };
-export const DEFAULT_OPTIONS = { showBookerNames: false, eventsRsvpEnabled: true, issuePhotosEnabled: true, homeContacts: true, usageAnalytics: true };
+export const DEFAULT_OPTIONS = { showBookerNames: false, eventsRsvpEnabled: true, issuePhotosEnabled: true, homeContacts: true, usageAnalytics: true, pushNotificationsEnabled: true };
 
 export const ACCENTS = ['green', 'ocean', 'sunset', 'berry', 'mono', 'zimmer'];
 // Primary colour of each preset: the web app manifest and the browser bar need it without running the UI code.
@@ -71,6 +72,7 @@ const OPTION_INFO = {
   issuePhotosEnabled: ['section:issues', 'On by default. People can attach one small photo (shrunk in their browser to about 200 KB) to a problem report. Turn off to stop accepting photos.', 'People reporting problems and the facility team.'],
   homeContacts: ['section:features', 'Home shows the contacts marked “Show on Home” (Manage → Content → Contacts). If none are marked, it shows the first emergency contacts. Needs the Important contacts feature to be on.', 'Everyone on Home.'],
   usageAnalytics: ['section:privacy', 'On by default. Counts how often each screen is opened and how many people sign in each day, for the Usage dashboard. See exactly what is collected below. Turning it off stops counting straight away.', 'Everyone (counting only; nothing they type is collected).'],
+  pushNotificationsEnabled: ['section:notifications', 'On by default. Lets people toggle push notifications on mobile and desktop devices.', 'Everyone on mobile and desktop.'],
 };
 
 export const SETTINGS = [
@@ -95,6 +97,7 @@ export const SETTINGS = [
   { key: 'issues.reopenDays', section: 'issues', group: 'Reports', type: 'integer', min: 1, max: 60, unit: 'days', label: 'Reopen window', help: 'How long after a fix the reporter can tap “Still not fixed”.', affects: 'People who report problems.', default: 7 },
 
   { key: 'notifications.retentionDays', section: 'notifications', group: 'Bell', type: 'integer', min: 7, max: 365, unit: 'days', label: 'Keep notifications for', help: 'Older notifications are removed automatically, once a day. Who receives which notification is set per role (Manage → Roles) and per person (Me).', affects: 'Everyone’s bell.', default: 30 },
+  { key: 'notifications.pushEnabled', section: 'notifications', group: 'Push', type: 'boolean', label: 'Push notifications (mobile & desktop)', help: 'Enable web push notifications on mobile and desktop devices. Employees can toggle their personal preferences in Me → Notifications.', affects: 'Everyone on mobile and desktop.', default: true },
 
   { key: 'usageRetentionDays', section: 'privacy', group: 'Retention', type: 'integer', min: 30, max: 1095, unit: 'days', label: 'Days to keep usage data', help: 'Older usage counts and sign-in history are removed automatically, once a day (400 by default).', affects: 'Usage dashboard and the activity log.', default: 400, legacy: ['general_settings', 'usageRetentionDays'] },
 

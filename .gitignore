@@ -8,4 +8,5 @@ data/
 *.log
 .dev.vars
 .wrangler/
+scripts/
 *.log

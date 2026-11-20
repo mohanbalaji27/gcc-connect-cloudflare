@@ -4,8 +4,7 @@ import { effectivePermissions } from './security.js';
 // a checkbox per type and channel. `requires` hides a type from people who could not open what it points to.
 export const NOTIFICATION_CHANNELS = [
   { id: 'inapp', label: 'In-app', available: true },
-  // Reserved in the data model (preferences are stored per channel) but not delivered yet: it stays hidden in the UI.
-  { id: 'push', label: 'Browser push', available: false, comingSoon: true },
+  { id: 'push', label: 'Push (mobile & desktop)', available: true },
 ];
 export const NOTIFICATION_TYPES = {
   issue_new: { label: 'New issue reported', description: 'A new facility issue in a category you look after.', group: 'Facility issues', requires: 'issues.view_all', default: true },
@@ -145,15 +144,22 @@ export function registerNotifications({ app, db, requireAuth, requireCsrf, fail,
   const loadChoices = async (userId) => (await db.query(
     `SELECT e.notify_prefs, COALESCE(cr.notify_defaults, dr.notify_defaults, '{}'::jsonb) AS role_defaults, COALESCE(cr.system_key = 'facility_manager', FALSE) AS is_manager,
             (SELECT COALESCE(array_agg(DISTINCT r.category_id), '{}') FROM issue_category_routes r
-              WHERE r.kind IN ('notify', 'escalate') AND (r.employee_id = e.id OR (r.role_id IS NOT NULL AND r.role_id = e.custom_role_id))) AS routed
+              WHERE r.kind IN ('notify', 'escalate') AND (r.employee_id = e.id OR (r.role_id IS NOT NULL AND r.role_id = e.custom_role_id))) AS routed,
+            now() AS read_at
      FROM employees e ${PERSON_JOINS} WHERE e.id = $1`, [userId])).rows[0];
 
   app.get('/api/me/notification-prefs', requireAuth, async (req, res) => {
     const { notify_prefs: prefs, role_defaults: defaults, routed, is_manager: manager } = await loadChoices(req.user.id);
     const types = visibleTypes(req.user).map((id) => {
-      const own = prefs?.types?.[id]?.inapp;
-      const fromRole = defaults?.types?.[id]?.inapp;
-      return { id, inapp: { value: own ?? fromRole ?? NOTIFICATION_TYPES[id].default, source: own !== undefined ? 'you' : fromRole !== undefined ? 'role' : 'default' } };
+      const ownInApp = prefs?.types?.[id]?.inapp;
+      const fromRoleInApp = defaults?.types?.[id]?.inapp;
+      const ownPush = prefs?.types?.[id]?.push;
+      const fromRolePush = defaults?.types?.[id]?.push;
+      return {
+        id,
+        inapp: { value: ownInApp ?? fromRoleInApp ?? NOTIFICATION_TYPES[id].default, source: ownInApp !== undefined ? 'you' : fromRoleInApp !== undefined ? 'role' : 'default' },
+        push: { value: ownPush ?? fromRolePush ?? false, source: ownPush !== undefined ? 'you' : fromRolePush !== undefined ? 'role' : 'default' },
+      };
     });
     let categories = [];
     if (req.user.permissions.includes('issues.view_all') && (await readSettings()).features.issues !== false) {
