@@ -184,6 +184,8 @@ code { background: var(--green-soft); padding: 1px 6px; border-radius: 6px; font
 .login-card { align-self: center; justify-self: center; width: min(420px, calc(100% - 36px)); display: flex; flex-direction: column; gap: 16px; padding: 30px; background: var(--card); border-radius: 24px; box-shadow: var(--shadow-lift); animation: rise .5s ease both; }
 .login-card.wide { width: min(480px, calc(100% - 36px)); }
 .login-card h2 { font-size: 1.6rem; }
+.login-fields { border: 0; margin: 0; padding: 0; min-width: 0; display: flex; flex-direction: column; gap: 16px; }
+fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
 .demo-box { display: flex; flex-direction: column; gap: 8px; padding: 14px; border-radius: 14px; background: var(--tint-2); border: 1px dashed var(--primary-line); }
 .demo-row { display: flex; gap: 8px; flex-wrap: wrap; }
 

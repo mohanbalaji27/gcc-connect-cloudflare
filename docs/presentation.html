@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Zimmer Biomet GCC Workspace - Executive Director Presentation</title>
+  <style>
+    :root {
+      --zb-blue: #0067b1;
+      --zb-navy: #003c71;
+      --zb-light: #f4f7fa;
+      --ink: #1e293b;
+      --ink-soft: #64748b;
+      --card-bg: #ffffff;
+      --border: #e2e8f0;
+      --green: #10b981;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: var(--zb-navy);
+      color: var(--ink);
+      overflow: hidden;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      user-select: none;
+    }
+    .slide-viewport {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 40px;
+    }
+    .slide {
+      display: none;
+      width: 100%;
+      max-width: 1100px;
+      height: 640px;
+      background: var(--card-bg);
+      border-radius: 20px;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.4);
+      padding: 48px 56px;
+      flex-direction: column;
+      position: relative;
+      animation: fadeIn 0.3s ease-out;
+    }
+    .slide.active {
+      display: flex;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .slide-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 2px solid var(--border);
+      padding-bottom: 16px;
+      margin-bottom: 24px;
+    }
+    .zb-tag {
+      font-size: 0.8rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--zb-blue);
+      background: #e6f0fa;
+      padding: 4px 10px;
+      border-radius: 6px;
+    }
+    .slide-number {
+      font-size: 0.85rem;
+      color: var(--ink-soft);
+      font-weight: 600;
+    }
+    h1 {
+      font-size: 2.3rem;
+      color: var(--zb-navy);
+      line-height: 1.2;
+      margin-bottom: 8px;
+    }
+    h2 {
+      font-size: 1.8rem;
+      color: var(--zb-blue);
+      margin-bottom: 16px;
+    }
+    p.subtitle {
+      font-size: 1.15rem;
+      color: var(--ink-soft);
+      margin-bottom: 24px;
+    }
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 24px;
+      flex: 1;
+    }
+    .grid-3 {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 20px;
+      flex: 1;
+    }
+    .card {
+      background: var(--zb-light);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .card h3 {
+      font-size: 1.15rem;
+      color: var(--zb-navy);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .card p, .card li {
+      font-size: 0.95rem;
+      color: var(--ink);
+      line-height: 1.5;
+    }
+    .card ul {
+      margin-left: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .highlight-stat {
+      font-size: 2.2rem;
+      font-weight: 800;
+      color: var(--zb-blue);
+      line-height: 1;
+    }
+    .highlight-label {
+      font-size: 0.85rem;
+      color: var(--ink-soft);
+      text-transform: uppercase;
+      font-weight: 600;
+    }
+    .speaker-notes {
+      margin-top: auto;
+      background: #fffbeb;
+      border-left: 4px solid #f59e0b;
+      padding: 10px 14px;
+      border-radius: 0 8px 8px 0;
+      font-size: 0.85rem;
+      color: #78350f;
+    }
+    .controls {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 40px;
+      background: rgba(0, 0, 0, 0.3);
+      color: white;
+    }
+    .nav-btn {
+      background: var(--zb-blue);
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 8px;
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .nav-btn:hover { background: #00528e; }
+    .nav-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .hint { font-size: 0.85rem; opacity: 0.7; }
+  </style>
+</head>
+<body>
+
+  <div class="slide-viewport">
+
+    <!-- Slide 1 -->
+    <div class="slide active">
+      <div class="slide-header">
+        <span class="zb-tag">Zimmer Biomet Global Capability Center</span>
+        <span class="slide-number">Slide 1 of 8</span>
+      </div>
+      <div style="flex: 1; display: flex; flex-direction: column; justify-content: center; text-align: center;">
+        <span style="font-size: 3.5rem; margin-bottom: 12px;">🏢</span>
+        <h1>Zimmer Biomet GCC Workspace</h1>
+        <p class="subtitle" style="font-size: 1.35rem; color: var(--zb-blue); font-weight: 600; margin-top: 8px;">
+          Next-Generation Smart Campus Experience & Space Utilization Intelligence
+        </p>
+        <p style="color: var(--ink-soft); font-size: 1rem; max-width: 650px; margin: 0 auto 30px;">
+          A serverless, edge-native digital headquarters connecting 184 CAD-calibrated workstations, 8 meeting spaces, cafeteria operations, and instant facilities response.
+        </p>
+        <div style="display: flex; justify-content: center; gap: 40px;">
+          <div><div class="highlight-stat">184</div><div class="highlight-label">CAD Desks</div></div>
+          <div><div class="highlight-stat">8</div><div class="highlight-label">Meeting Rooms</div></div>
+          <div><div class="highlight-stat">&lt; 50ms</div><div class="highlight-label">Global Latency</div></div>
+          <div><div class="highlight-stat">$0 / mo</div><div class="highlight-label">Idle Server Cost</div></div>
+        </div>
+      </div>
+      <div class="speaker-notes">
+        <strong>Executive Hook:</strong> Good morning Director. Today I present our purpose-built digital campus platform designed specifically for our Zimmer Biomet GCC in Bangalore.
+      </div>
+    </div>
+
+    <!-- Slide 2 -->
+    <div class="slide">
+      <div class="slide-header">
+        <span class="zb-tag">The Business Context</span>
+        <span class="slide-number">Slide 2 of 8</span>
+      </div>
+      <h2>The Problem: Everyday Hybrid Workplace Friction</h2>
+      <div class="grid-2">
+        <div class="card" style="border-left: 4px solid #ef4444;">
+          <h3>⚠️ What Employees Experience Today</h3>
+          <ul>
+            <li><strong>Ghost Bookings & Seat Scramble:</strong> Arriving at the office without knowing where teammates sit or if quiet spots are free.</li>
+            <li><strong>Meeting Room Contention:</strong> Walking to conference rooms only to find them occupied or booked on calendar with nobody inside.</li>
+            <li><strong>Slow Facilities Support:</strong> Reporting a broken AC or AV projector requires writing emails or chasing coordinators.</li>
+            <li><strong>Disconnected Office Life:</strong> Cafeteria menus printed on paper boards; company townhall RSVPs lost in inboxes.</li>
+          </ul>
+        </div>
+        <div class="card" style="border-left: 4px solid var(--zb-blue);">
+          <h3>📊 What Leadership Faces</h3>
+          <ul>
+            <li><strong>Zero Real-Time Spatial Intelligence:</strong> No data on peak Tuesday/Thursday desk utilization versus Friday lulls.</li>
+            <li><strong>Expensive SaaS Licensing:</strong> Commercial hot-desking tools charge $5–$12 per employee per month with recurring annual cost bloat.</li>
+            <li><strong>Heavy Infrastructure & VPN Requirements:</strong> Traditional software requires virtual machines, OS maintenance, and IT patching.</li>
+          </ul>
+        </div>
+      </div>
+      <div class="speaker-notes">
+        <strong>Script:</strong> When employees come into our GCC, they shouldn't spend 20 minutes wondering where to sit or chasing facilities. Commercial software is costly and bloated. We built an agile, high-speed solution tailored to our campus.
+      </div>
+    </div>
+
+    <!-- Slide 3 -->
+    <div class="slide">
+      <div class="slide-header">
+        <span class="zb-tag">The Solution</span>
+        <span class="slide-number">Slide 3 of 8</span>
+      </div>
+      <h2>The Solution: Zimmer Biomet GCC Workspace Platform</h2>
+      <p class="subtitle">A lightning-fast, progressive web application accessible from any phone, laptop, or tablet.</p>
+      <div class="grid-3">
+        <div class="card">
+          <h3>🗺️ Interactive CAD Map</h3>
+          <p>Real architectural vector floor plan. See 184 desks with live availability tooltips without guessing. Reserve in 1 click.</p>
+        </div>
+        <div class="card">
+          <h3>🍽️ Cafeteria & Lifestyle</h3>
+          <p>Daily meal cards with diet filters (Veg, Non-veg, Egg), chef specials, and star ratings. Pinned announcements & 1-tap event RSVPs.</p>
+        </div>
+        <div class="card">
+          <h3>🛠️ Instant Facilities Portal</h3>
+          <p>Scan desk/room QR stickers to report problems with photos. Dedicated "Staff Home" portal with big buttons for on-ground workers.</p>
+        </div>
+        <div class="card">
+          <h3>📊 Leadership Intelligence</h3>
+          <p>Real-time analytics on peak occupancy, most utilized zones, and room hours. Data-driven real estate planning.</p>
+        </div>
+        <div class="card">
+          <h3>🛡️ Enterprise Governance</h3>
+          <p>Custom roles builder (Facility Manager, Staff, HR, Employee) with fine-grained permissions and full audit logging.</p>
+        </div>
+        <div class="card">
+          <h3>⚡ Serverless Economics</h3>
+          <p>Deployed on Cloudflare Workers edge network with Neon PostgreSQL. Sub-50ms latency, zero server patching.</p>
+        </div>
+      </div>
+      <div class="speaker-notes">
+        <strong>Script:</strong> The platform unifies spatial booking, cafeteria life, issue ticketing, and spatial analytics into one cohesive, beautifully branded experience.
+      </div>
+    </div>
+
+    <!-- Slide 4 -->
+    <div class="slide">
+      <div class="slide-header">
+        <span class="zb-tag">Persona Story 1</span>
+        <span class="slide-number">Slide 4 of 8</span>
+      </div>
+      <h2>A Day in the Life: Priya (Software Engineer)</h2>
+      <div class="grid-2">
+        <div class="card">
+          <h3>🌅 Morning Shuttle to Desk</h3>
+          <ul>
+            <li><strong>8:30 AM:</strong> Priya opens <code>zb.gccworkspace.com</code> on her phone. She checks <em>"Who's in today"</em> to see where her team is seated.</li>
+            <li><strong>8:31 AM:</strong> She taps the floor plan. She spots desk <strong>Z042</strong> next to her teammate, taps it, selects "Full day", and confirms in one second.</li>
+            <li><strong>10:15 AM:</strong> For an impromptu standup, she opens Meeting Rooms, reserves <strong>Collab Zone</strong> for 45 minutes, and starts her meeting.</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>🍲 Lunch & Afternoon</h3>
+          <ul>
+            <li><strong>1:00 PM:</strong> In the cafeteria, she opens the Food Menu, filters by "Veg", checks today's specials, and leaves a 5-star rating for the chef.</li>
+            <li><strong>3:30 PM:</strong> A conference room display is blank. She points her phone camera at the room QR code sticker, takes a photo, and submits the issue in 10 seconds.</li>
+          </ul>
+        </div>
+      </div>
+      <div class="speaker-notes">
+        <strong>Script:</strong> For Priya, everything she needs in her working day is within arm's reach—no complex IT tickets, no confusion, just seamless productivity.
+      </div>
+    </div>
+
+    <!-- Slide 5 -->
+    <div class="slide">
+      <div class="slide-header">
+        <span class="zb-tag">Persona Story 2</span>
+        <span class="slide-number">Slide 5 of 8</span>
+      </div>
+      <h2>A Day in the Life: Ramesh (Facilities Specialist)</h2>
+      <div class="grid-2">
+        <div class="card">
+          <h3>📱 Tailored "Staff Home" Interface</h3>
+          <ul>
+            <li>Ramesh doesn't need to learn a complex enterprise interface.</li>
+            <li>He logs in using his Employee ID and is greeted by <strong>Staff Home</strong>: clean, high-contrast, big action buttons designed for mobile screens.</li>
+            <li>His task counter shows <strong>"2 Tasks Pending"</strong>.</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>⚡ Rapid Resolution Flow</h3>
+          <ul>
+            <li>Priya's ticket appears: <em>"Display Blank · Collab Zone · High Priority"</em>.</li>
+            <li>Ramesh taps <strong>"Start"</strong> $\rightarrow$ Priya is instantly notified that facilities is on it.</li>
+            <li>He swaps the HDMI cable, tests the display, and taps <strong>"Done"</strong>.</li>
+            <li>The ticket is archived under Closed issues with a complete timestamped audit trail.</li>
+          </ul>
+        </div>
+      </div>
+      <div class="speaker-notes">
+        <strong>Script:</strong> Our facilities team receives a simplified, friction-free portal. No desktop computer needed—they can triage and close tickets right from their mobile phone in the hallway.
+      </div>
+    </div>
+
+    <!-- Slide 6 -->
+    <div class="slide">
+      <div class="slide-header">
+        <span class="zb-tag">Persona Story 3</span>
+        <span class="slide-number">Slide 6 of 8</span>
+      </div>
+      <h2>The Leadership & Super Admin Console</h2>
+      <div class="grid-2">
+        <div class="card">
+          <h3>📈 Real-Time Spatial Analytics</h3>
+          <ul>
+            <li><strong>Daily Occupancy Trends:</strong> Compare Tuesday/Wednesday peaks with Friday attendance.</li>
+            <li><strong>Meeting Room Utilization:</strong> Measure total hours booked per room to identify whether more small huddle rooms or large boardrooms are needed.</li>
+            <li><strong>Feature Usage Heatmap:</strong> Observe which modules employees use most.</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>⚙️ Complete Administrative Control</h3>
+          <ul>
+            <li><strong>Instant Feature Toggles:</strong> Turn the Food Menu, Idea Box, or Events modules on/off in real-time.</li>
+            <li><strong>Granular Role Builder:</strong> Create bespoke roles (HR, Receptionist, Facility Manager) with specific permission checkboxes.</li>
+            <li><strong>Brand Styling:</strong> Custom logo upload, Zimmer Biomet blue theme (`#0067b1`), and custom login announcements.</li>
+          </ul>
+        </div>
+      </div>
+      <div class="speaker-notes">
+        <strong>Script:</strong> For leadership, this turns our physical office into measurable data. We know exactly which zones are popular and when our spaces are reaching capacity.
+      </div>
+    </div>
+
+    <!-- Slide 7 -->
+    <div class="slide">
+      <div class="slide-header">
+        <span class="zb-tag">Technical Excellence & ROI</span>
+        <span class="slide-number">Slide 7 of 8</span>
+      </div>
+      <h2>Cloud Economics & Architecture Comparison</h2>
+      <div class="grid-2">
+        <div class="card" style="border-left: 4px solid #ef4444;">
+          <h3>Commercial SaaS & Traditional Cloud</h3>
+          <ul>
+            <li><strong>Licensing:</strong> $5 – $12 per employee/month ($1,000–$2,000/mo for 200 staff).</li>
+            <li><strong>Hosting:</strong> Dedicated AWS EC2/RDS running 24/7 costs $300–$600/month.</li>
+            <li><strong>Maintenance:</strong> Requires OS security updates, server monitoring, database backups.</li>
+            <li><strong>Floor Plan:</strong> Generic box grid that doesn't match our real walls or doors.</li>
+          </ul>
+        </div>
+        <div class="card" style="border-left: 4px solid var(--green);">
+          <h3>Zimmer Biomet GCC Workspace</h3>
+          <ul>
+            <li><strong>Licensing:</strong> <strong>$0</strong> (Proprietary in-house IP).</li>
+            <li><strong>Hosting:</strong> <strong>&lt; $5 / month</strong> (Cloudflare edge + Neon serverless scales to zero).</li>
+            <li><strong>Maintenance:</strong> Zero operating system patching; 99.99% edge availability.</li>
+            <li><strong>Floor Plan:</strong> <strong>100% Vector CAD Tender Drawing Fidelity</strong>.</li>
+          </ul>
+        </div>
+      </div>
+      <div class="speaker-notes">
+        <strong>Script:</strong> In terms of ROI, this platform saves tens of thousands of dollars in commercial software fees while giving us higher performance and full ownership.
+      </div>
+    </div>
+
+    <!-- Slide 8 -->
+    <div class="slide">
+      <div class="slide-header">
+        <span class="zb-tag">Next Steps</span>
+        <span class="slide-number">Slide 8 of 8</span>
+      </div>
+      <h2>Rollout Plan & Director Recommendations</h2>
+      <div style="flex: 1; display: flex; flex-direction: column; justify-content: space-around;">
+        <div class="card" style="display: flex; flex-direction: row; align-items: center; gap: 20px;">
+          <div style="font-size: 2rem; background: #e0f2fe; padding: 12px; border-radius: 12px;">1️⃣</div>
+          <div>
+            <strong>Phase 1: IT & Facilities Pilot (Weeks 1–2)</strong>
+            <p style="font-size: 0.9rem; color: var(--ink-soft);">Test desk booking and issue triage with 30 pioneer users across Zone A.</p>
+          </div>
+        </div>
+        <div class="card" style="display: flex; flex-direction: row; align-items: center; gap: 20px;">
+          <div style="font-size: 2rem; background: #e0f2fe; padding: 12px; border-radius: 12px;">2️⃣</div>
+          <div>
+            <strong>Phase 2: QR Code Floor Deployment (Week 2)</strong>
+            <p style="font-size: 0.9rem; color: var(--ink-soft);">Print and stick QR stickers onto all 184 desks and 8 meeting rooms using our built-in QR generator.</p>
+          </div>
+        </div>
+        <div class="card" style="display: flex; flex-direction: row; align-items: center; gap: 20px;">
+          <div style="font-size: 2rem; background: #e0f2fe; padding: 12px; border-radius: 12px;">3️⃣</div>
+          <div>
+            <strong>Phase 3: Campus-Wide Launch (Week 3)</strong>
+            <p style="font-size: 0.9rem; color: var(--ink-soft);">Onboard all employees at <code>zb.gccworkspace.com</code> with PWA mobile home-screen installation.</p>
+          </div>
+        </div>
+      </div>
+      <div class="speaker-notes">
+        <strong>Closing:</strong> The platform is fully built, tested, and deployed live at zb.gccworkspace.com right now. Thank you, and I welcome any questions!
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Controls Bar -->
+  <div class="controls">
+    <button class="nav-btn" id="prevBtn" onclick="prevSlide()">← Previous Slide</button>
+    <div class="hint">Use <strong>Left / Right Arrow Keys</strong> or click buttons to navigate. Press <strong>F11</strong> for Full Screen.</div>
+    <button class="nav-btn" id="nextBtn" onclick="nextSlide()">Next Slide →</button>
+  </div>
+
+  <script>
+    let currentSlide = 0;
+    const slides = document.querySelectorAll('.slide');
+    const prevBtn = document.getElementById('prevBtn');
+    const nextBtn = document.getElementById('nextBtn');
+
+    function updateSlide() {
+      slides.forEach((s, idx) => {
+        s.classList.toggle('active', idx === currentSlide);
+      });
+      prevBtn.disabled = currentSlide === 0;
+      nextBtn.disabled = currentSlide === slides.length - 1;
+    }
+
+    function prevSlide() {
+      if (currentSlide > 0) { currentSlide--; updateSlide(); }
+    }
+    function nextSlide() {
+      if (currentSlide < slides.length - 1) { currentSlide++; updateSlide(); }
+    }
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowRight' || e.key === 'PageDown' || e.key === ' ') nextSlide();
+      if (e.key === 'ArrowLeft' || e.key === 'PageUp') prevSlide();
+    });
+
+    updateSlide();
+  </script>
+</body>
+</html>
