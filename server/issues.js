@@ -6,7 +6,7 @@ import { PERSON_COLUMNS, PERSON_JOINS, canReceive } from './notifications.js';
 export const ISSUE_STATUSES = ['new', 'acknowledged', 'in_progress', 'waiting', 'resolved', 'closed'];
 export const OPEN_STATUSES = ['new', 'acknowledged', 'in_progress', 'waiting'];
 export const ISSUE_PRIORITIES = ['low', 'normal', 'high', 'urgent'];
-export const REOPEN_WINDOW_DAYS = 7;
+export const REOPEN_WINDOW_DAYS = 7; // the default; the live value is the issues.reopenDays setting
 export const PHOTO_MAX_BYTES = 400 * 1024;
 const OPEN_SQL = OPEN_STATUSES.map((status) => `'${status}'`).join(',');
 const STATUS_LABEL = { new: 'New', acknowledged: 'Seen', in_progress: 'In progress', waiting: 'Waiting', resolved: 'Fixed', closed: 'Closed' };
@@ -53,6 +53,7 @@ export function registerIssues({ app, db, requireAuth, requireCsrf, requireAnyPe
   };
 
   const photosOn = async () => (await readSettings()).options.issuePhotosEnabled !== false;
+  const reopenDays = async () => (await readSettings()).values['issues.reopenDays'] ?? REOPEN_WINDOW_DAYS;
 
   // People who are told about a category: routed people and roles, facility managers, and anyone who subscribed. Their own
   // choices and permissions are applied afterwards, so nobody hears about what they cannot open or have switched off.
@@ -122,7 +123,7 @@ export function registerIssues({ app, db, requireAuth, requireCsrf, requireAnyPe
     res.set('Cache-Control', 'private, no-cache');
     res.json({
       categories: rows.map((row) => ({ id: row.id, name: row.name, emoji: row.emoji, description: row.description, defaultPriority: row.default_priority })),
-      photosEnabled: await photosOn(), reopenDays: REOPEN_WINDOW_DAYS,
+      photosEnabled: await photosOn(), reopenDays: await reopenDays(),
     });
   });
 
@@ -281,7 +282,7 @@ export function registerIssues({ app, db, requireAuth, requireCsrf, requireAnyPe
     const updates = (await db.query(
       `SELECT u.id::text AS id, u.kind, u.body, u.internal, u.from_value, u.to_value, u.created_at, u.author_id, a.name AS author_name
        FROM issue_updates u LEFT JOIN employees a ON a.id = u.author_id WHERE u.issue_id = $1 AND (u.internal = FALSE OR $2::boolean) ORDER BY u.id LIMIT 300`, [row.id, staffView])).rows;
-    const windowOpen = row.resolved_at && Date.now() - new Date(row.resolved_at).getTime() <= REOPEN_WINDOW_DAYS * 86_400_000;
+    const windowOpen = row.resolved_at && Date.now() - new Date(row.resolved_at).getTime() <= (await reopenDays()) * 86_400_000;
     return {
       issue: shape(row, user),
       updates: updates.map((u) => ({ id: u.id, kind: u.kind, body: u.body, internal: u.internal, from: u.from_value, to: u.to_value, createdAt: u.created_at, authorId: u.author_id, authorName: u.author_name })),
@@ -389,11 +390,12 @@ export function registerIssues({ app, db, requireAuth, requireCsrf, requireAnyPe
   app.post('/api/issues/:id/reopen', requireAuth, feature('issues'), requireCsrf, async (req, res) => {
     if (!limit(`issue-reopen:${req.user.id}`, 10, 60 * 60_000)) throw fail(429, 'RATE_LIMITED', 'Please wait a bit before trying again.');
     const note = text(req.body?.note, 500, { label: 'Note' }) || '';
+    const windowDays = await reopenDays();
     const result = await db.tx(async (tx) => {
       const issue = await loadIssue(tx, req.params.id, true);
       if (!issue || issue.reporter_id !== req.user.id) throw notFound();
       if (!['resolved', 'closed'].includes(issue.status)) throw fail(409, 'NOT_RESOLVED', 'This issue is still open.');
-      if (!issue.resolved_at || Date.now() - new Date(issue.resolved_at).getTime() > REOPEN_WINDOW_DAYS * 86_400_000) throw fail(409, 'REOPEN_WINDOW_OVER', `This was fixed more than ${REOPEN_WINDOW_DAYS} days ago. Please report it again.`);
+      if (!issue.resolved_at || Date.now() - new Date(issue.resolved_at).getTime() > windowDays * 86_400_000) throw fail(409, 'REOPEN_WINDOW_OVER', `This was fixed more than ${windowDays} days ago. Please report it again.`);
       await tx.query("UPDATE issues SET status = 'new', resolved_at = NULL, updated_at = now() WHERE id = $1", [issue.id]);
       await tx.query("INSERT INTO issue_updates (issue_id, author_id, kind, body, from_value, to_value) VALUES ($1,$2,'reopen',$3,$4,'new')", [issue.id, req.user.id, note || 'Still not fixed', issue.status]);
       return issue;

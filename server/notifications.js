@@ -88,7 +88,7 @@ export function createNotifier(db) {
   // Clearing old rows is cheap but pointless to repeat: at most once a day per server, and the guard row makes sure only one
   // server instance does it.
   let cleanupMark = '';
-  async function maybeCleanup() {
+  async function maybeCleanup(retentionDays = RETENTION_DAYS) {
     const mark = new Date().toISOString().slice(0, 10);
     if (cleanupMark === mark) return;
     cleanupMark = mark;
@@ -96,7 +96,7 @@ export function createNotifier(db) {
       const claimed = await db.query(
         `INSERT INTO app_settings (key, value) VALUES ('notifications_cleanup', to_jsonb($1::text))
          ON CONFLICT (key) DO UPDATE SET value = excluded.value WHERE app_settings.value IS DISTINCT FROM excluded.value RETURNING key`, [mark]);
-      if (claimed.rows.length) await db.query(`DELETE FROM notifications WHERE created_at < now() - make_interval(days => ${RETENTION_DAYS})`);
+      if (claimed.rows.length) await db.query(`DELETE FROM notifications WHERE created_at < now() - make_interval(days => ${Number(retentionDays) || RETENTION_DAYS})`);
     } catch (error) {
       cleanupMark = '';
       console.error('Notification cleanup failed:', error.message);
@@ -123,7 +123,7 @@ export function registerNotifications({ app, db, requireAuth, requireCsrf, fail,
     const rows = (await db.query(
       `SELECT id::text AS id, type, title, body, link, data, created_at, read_at FROM notifications
        WHERE user_id = $1 AND ($2::bigint IS NULL OR id < $2::bigint) ORDER BY id DESC LIMIT $3`, [req.user.id, before, size + 1])).rows;
-    await notifier.maybeCleanup();
+    await notifier.maybeCleanup((await readSettings()).values['notifications.retentionDays']);
     res.json({ notifications: rows.slice(0, size).map(view), hasMore: rows.length > size, unread: await notifier.unreadCount(req.user.id) });
   });
 

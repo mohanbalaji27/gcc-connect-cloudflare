@@ -77,7 +77,11 @@ interface Kit { toast: (message: string, kind?: ToastKind) => void; celebrate: (
 const KitContext = createContext<Kit>({ toast: () => {}, celebrate: () => {} });
 export const useKit = () => useContext(KitContext);
 
-const CONFETTI_COLORS = ['#d7f35a', '#2f9e6f', '#e8772e', '#6c5ce7', '#0984e3', '#e0457b', '#f6c945'];
+// Confetti takes its colours from the active theme so it always matches the app.
+const confettiColours = () => {
+  const style = getComputedStyle(document.documentElement);
+  return ['--accent', '--primary', '--orange', '--lilac', '--blue', '--pink', '--warn'].map((name) => style.getPropertyValue(name).trim() || '#f6c945');
+};
 
 export function KitProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -112,15 +116,18 @@ export function KitProvider({ children }: { children: ReactNode }) {
 }
 
 function Confetti() {
-  const pieces = useMemo(() => Array.from({ length: 70 }, (_, index) => ({
-    left: Math.random() * 100,
-    delay: Math.random() * 0.35,
-    duration: 1.6 + Math.random() * 1.2,
-    drift: (Math.random() - 0.5) * 220,
-    color: CONFETTI_COLORS[index % CONFETTI_COLORS.length],
-    size: 6 + Math.random() * 7,
-    spin: Math.random() * 720 - 360,
-  })), []);
+  const pieces = useMemo(() => {
+    const colours = confettiColours();
+    return Array.from({ length: 70 }, (_, index) => ({
+      left: Math.random() * 100,
+      delay: Math.random() * 0.35,
+      duration: 1.6 + Math.random() * 1.2,
+      drift: (Math.random() - 0.5) * 220,
+      color: colours[index % colours.length],
+      size: 6 + Math.random() * 7,
+      spin: Math.random() * 720 - 360,
+    }));
+  }, []);
   return (
     <div className="confetti" aria-hidden="true">
       {pieces.map((piece, index) => (

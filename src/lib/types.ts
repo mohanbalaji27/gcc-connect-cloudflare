@@ -1,4 +1,5 @@
 ﻿import type { ReviewVisibility } from './menuCatalog';
+import type { Theme } from './theme';
 
 export type Role = 'user' | 'admin' | 'super_admin';
 // Permissions come from the server's catalogue (config.permissionCatalog); the browser keeps no list of its own.
@@ -35,6 +36,7 @@ export interface AdminBooking {
 export interface OfficeEvent {
   id: string; title: string; description: string; starts_at: string; ends_at: string; venue: string;
   category: string; audience: string; going_count: number; going: boolean; links: { label: string; url: string }[];
+  rsvp_enabled?: boolean;
 }
 export interface Summary { streak: number; monthCount: number; totalVisits: number; desksTotal: number; desksLeftToday: number }
 export interface ManagedUser {
@@ -55,10 +57,38 @@ export interface AuditPage { entries: AuditEntry[]; hasMore: boolean; next: stri
 export const EVENT_CATEGORIES = ['Learning', 'Community', 'Company', 'Social', 'Wellness', 'Team'];
 
 export type FeatureKey = 'links' | 'contacts' | 'menu' | 'announcements' | 'issues' | 'kudos' | 'polls' | 'celebrations' | 'feedback' | 'whosin' | 'vibes';
-export interface Branding { appName: string; tagline: string; accent: string; welcome: string }
+export type LogoSlot = 'header' | 'login' | 'icon192' | 'icon512' | 'favicon' | 'headerDark' | 'loginDark';
+export interface LogoMeta { v: string; slots: LogoSlot[]; bg: string | null }
+export interface Branding {
+  appName: string; shortName: string; tagline: string; welcome: string;
+  /** A preset id (green, ocean, ..., zimmer) or "custom" (then `theme` holds the colours). */
+  accent: string; theme: Theme | null;
+  logoHeight: number; logoAlign: 'left' | 'center'; logoDisplay: 'logo' | 'logo-text' | 'text';
+}
+export interface LoginConfig {
+  title: string; subtitle: string; cardTitle: string; cardText: string;
+  background: 'gradient' | 'solid' | 'pattern' | 'image'; card: 'solid' | 'glass' | 'outlined';
+  showLogo: boolean; showTip: boolean; bullets: string[];
+  footerText: string; footerLinks: { label: string; url: string }[]; forgotHelp: string; usernameHint: string;
+}
+export type HomeCardId = 'hero' | 'news' | 'stats' | 'quick' | 'menu' | 'whosin' | 'celebrate' | 'contacts' | 'links' | 'events' | 'tip';
+export interface HomeConfig { layout: { id: HomeCardId; on: boolean }[]; greeting: string }
+export interface PublicConfig { branding: Branding; login: LoginConfig; logo: LogoMeta; passwordMinLength: number }
+export type SettingValue = boolean | number | string;
+export interface SettingDef {
+  key: string; section: string; group: string; type: 'boolean' | 'integer' | 'enum' | 'object';
+  label: string; help: string; affects: string; default: SettingValue | null; min?: number; max?: number; unit?: string; options?: [string, string][];
+}
+export interface SettingsSchema {
+  sections: { id: string; label: string; icon: string; blurb: string }[]; settings: SettingDef[];
+  homeCards: { id: HomeCardId; label: string; hint: string }[]; themeFields: string[];
+}
 export type OptionKey = 'showBookerNames' | 'eventsRsvpEnabled' | 'issuePhotosEnabled' | 'homeContacts' | 'usageAnalytics';
 export interface AppConfig {
-  features: Record<FeatureKey, boolean>; branding: Branding; options: Record<OptionKey, boolean>; featureCatalog: Record<FeatureKey, string>; optionCatalog: Record<OptionKey, string>; accents: string[];
+  features: Record<FeatureKey, boolean>; branding: Branding; login: LoginConfig; home: HomeConfig; logo: LogoMeta;
+  /** Every scalar setting by its key (see server/settings-registry.js). */
+  settings: Record<string, SettingValue>; settingsSchema?: SettingsSchema;
+  options: Record<OptionKey, boolean>; featureCatalog: Record<FeatureKey, string>; optionCatalog: Record<OptionKey, string>; accents: string[];
   menuReviewsVisibility: ReviewVisibility; menuHistoryDays: number; usageRetentionDays: number; homeContactsCount: number;
   permissionCatalog: PermissionCatalog; notificationCatalog: NotificationCatalog;
 }

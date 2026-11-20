@@ -27,11 +27,11 @@
 .pm-diff { padding: 12px 14px; border-radius: 12px; margin-top: 10px; }
 .pm-diff ul { list-style: none; padding: 0; margin: 6px 0 0; display: flex; flex-direction: column; gap: 4px; }
 .pm-diff li { display: flex; align-items: center; gap: 8px; font-size: .92rem; }
-.pm-diff.add { background: #e4f5ea; color: #14532d; }
-.pm-diff.remove { background: #fdeeee; color: #8b2323; }
-:root[data-theme="dark"] .pm-diff.add { background: #1c4630; color: #bdf0d1; }
-:root[data-theme="dark"] .pm-diff.remove { background: #4a2626; color: #ffc6c6; }
-:root[data-theme="dark"] .pm-tag { color: #8be0b0; }
+.pm-diff.add { background: var(--success-soft); color: var(--success-ink); }
+.pm-diff.remove { background: var(--danger-soft); color: var(--danger-ink); }
+:root[data-theme="dark"] .pm-diff.add { background: var(--success-soft); color: var(--success-ink); }
+:root[data-theme="dark"] .pm-diff.remove { background: var(--danger-soft); color: var(--danger-ink); }
+:root[data-theme="dark"] .pm-tag { color: var(--success-ink); }
 
 /* Role and people editors */
 .role-section { border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }

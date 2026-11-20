@@ -1,39 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { ALL_PERMISSIONS, LEGACY_PERMISSIONS, RESERVED_PERMISSIONS, expandPermissions, permissionCatalog, safeUrl } from './security.js';
-import { DEFAULT_MENU_SETTINGS, REVIEW_VISIBILITY } from './menu-catalog.js';
+import { FEATURE_KEYS, DEFAULT_FEATURES, OPTION_KEYS, DEFAULT_OPTIONS, ACCENTS, DEFAULT_BRANDING, SETTING_BY_KEY, SettingsError, resolveAll, cleanScalar, mergeObject, flattenRequest, describeValue, OBJECT_KEYS, settingsSchema } from './settings-registry.js';
+import { registerBranding } from './branding.js';
+import { bumpConfigVersion } from './config-version.js';
 import { registerMenu } from './menu.js';
 import { registerNotifications, notificationCatalog, NOTIFICATION_TYPES } from './notifications.js';
 import { registerIssues } from './issues.js';
 
-export const FEATURE_KEYS = {
-  links: 'Useful links (user guides, portals)',
-  contacts: 'Important contacts',
-  menu: 'Food menu',
-  announcements: 'Announcements',
-  issues: 'Issue box (report a problem: coffee machine, tap, lights...)',
-  kudos: 'Kudos wall (optional)',
-  polls: 'Quick polls',
-  celebrations: 'Birthdays and work anniversaries',
-  feedback: 'Idea box (ideas and suggestions)',
-  whosin: 'Who is in today',
-  vibes: 'Points, levels and badges',
-};
-// Kudos is optional and off for brand-new installs. Existing installs keep whatever they stored (see migration 006).
-export const DEFAULT_FEATURES = { ...Object.fromEntries(Object.keys(FEATURE_KEYS).map((key) => [key, true])), kudos: false };
-// Extra on/off options (super admin). Stored together under the "options" settings key.
-export const OPTION_KEYS = {
-  showBookerNames: 'Show who booked a seat or room in availability details',
-  eventsRsvpEnabled: 'Let people tap “I’m going” on events',
-  issuePhotosEnabled: 'Let people attach one small photo to an issue report',
-  homeContacts: 'Show an Important contacts card on Home',
-  usageAnalytics: 'Count which screens people open (usage analytics)',
-};
-export const DEFAULT_OPTIONS = { showBookerNames: false, eventsRsvpEnabled: true, issuePhotosEnabled: true, homeContacts: true, usageAnalytics: true };
-// Plain numbers set by the super admin (stored together under "general_settings").
-export const GENERAL_LIMITS = { usageRetentionDays: [30, 1095], homeContactsCount: [1, 6] };
-export const DEFAULT_GENERAL = { usageRetentionDays: 400, homeContactsCount: 4 };
-export const ACCENTS = ['green', 'ocean', 'sunset', 'berry', 'mono'];
-export const DEFAULT_BRANDING = { appName: 'GCC Connect', tagline: 'Your office day, sorted.', accent: 'green', welcome: '' };
+export { FEATURE_KEYS, DEFAULT_FEATURES, OPTION_KEYS, DEFAULT_OPTIONS, ACCENTS, DEFAULT_BRANDING };
 export const KUDOS_BADGES = ['star', 'team', 'idea', 'fire', 'helper', 'coffee'];
 const TZ = 'Asia/Kolkata';
 const DAY_MS = 86_400_000;
@@ -60,35 +34,33 @@ export function registerFeatures({ app, db, requireAuth, requireSignedIn, requir
     return req.user.role === 'super_admin' ? next() : next(fail(403, 'SUPER_ADMIN_REQUIRED', 'Only a super admin can do that.'));
   };
 
-  // Food menu settings: who can read reviews (everyone | summary | managers) and how many past days of menus and reviews are kept.
-  const menuSettings = (stored) => {
-    const merged = { ...DEFAULT_MENU_SETTINGS, ...(stored ?? {}) };
-    return {
-      menuReviewsVisibility: REVIEW_VISIBILITY.includes(merged.menuReviewsVisibility) ? merged.menuReviewsVisibility : DEFAULT_MENU_SETTINGS.menuReviewsVisibility,
-      menuHistoryDays: Number.isInteger(merged.menuHistoryDays) && merged.menuHistoryDays >= 1 && merged.menuHistoryDays <= 90 ? merged.menuHistoryDays : DEFAULT_MENU_SETTINGS.menuHistoryDays,
-    };
-  };
-
-  const generalSettings = (stored) => {
-    const merged = { ...DEFAULT_GENERAL, ...(stored ?? {}) };
-    return Object.fromEntries(Object.entries(GENERAL_LIMITS).map(([key, [min, max]]) => [key, Number.isInteger(merged[key]) && merged[key] >= min && merged[key] <= max ? merged[key] : DEFAULT_GENERAL[key]]));
-  };
-
+  // Everything is read through the registry (server/settings-registry.js): typed values with defaults, older rows as fallback.
+  const SETTING_ROWS = "'settings_v2', 'features', 'branding', 'options', 'menu_settings', 'general_settings', 'brand_meta'";
   async function readSettings() {
-    const rows = (await db.query("SELECT key, value, now() AS read_at FROM app_settings WHERE key IN ('features', 'branding', 'options', 'menu_settings', 'general_settings')")).rows;
+    const rows = (await db.query(`SELECT key, value, now() AS read_at FROM app_settings WHERE key IN (${SETTING_ROWS})`)).rows;
     const stored = Object.fromEntries(rows.map((row) => [row.key, row.value]));
+    const { values, branding, login, home } = resolveAll(stored);
+    const meta = stored.brand_meta ?? {};
+    const get = (key) => values[key];
     return {
-      features: { ...DEFAULT_FEATURES, ...(stored.features ?? {}) },
-      branding: { ...DEFAULT_BRANDING, ...(stored.branding ?? {}) },
-      options: { ...DEFAULT_OPTIONS, ...(stored.options ?? {}) },
-      ...menuSettings(stored.menu_settings),
-      ...generalSettings(stored.general_settings),
+      features: Object.fromEntries(Object.keys(FEATURE_KEYS).map((name) => [name, get(`features.${name}`)])),
+      options: Object.fromEntries(Object.keys(OPTION_KEYS).map((name) => [name, get(`options.${name}`)])),
+      branding, login, home,
+      logo: { v: meta.v ?? '', slots: meta.slots ?? [], bg: meta.bg ?? null },
+      menuReviewsVisibility: get('menuReviewsVisibility'), menuHistoryDays: get('menuHistoryDays'),
+      usageRetentionDays: get('usageRetentionDays'), homeContactsCount: get('homeContactsCount'),
+      values,
     };
   }
-  const readConfig = async () => ({
-    ...(await readSettings()), featureCatalog: FEATURE_KEYS, optionCatalog: OPTION_KEYS, accents: ACCENTS,
-    permissionCatalog: permissionCatalog(), notificationCatalog: notificationCatalog(),
-  });
+  // What the browser gets in the bootstrap. The settings schema (labels, help, limits) is only for the super admin's console.
+  const readConfig = async (user = null) => {
+    const { values, ...rest } = await readSettings();
+    return {
+      ...rest, settings: values, featureCatalog: FEATURE_KEYS, optionCatalog: OPTION_KEYS, accents: ACCENTS,
+      permissionCatalog: permissionCatalog(), notificationCatalog: notificationCatalog(),
+      ...(user?.role === 'super_admin' ? { settingsSchema: settingsSchema() } : {}),
+    };
+  };
   // Managers can still read the area they run while it is switched off (GET with ?manage=1) so they can prepare content.
   const MANAGE_BYPASS = { links: 'content.links', contacts: 'content.contacts', announcements: 'content.announcements', menu: 'menu.edit', polls: 'community.polls', issues: 'issues.manage_categories' };
   const feature = (name) => async (req, _res, next) => {
@@ -103,79 +75,54 @@ export function registerFeatures({ app, db, requireAuth, requireSignedIn, requir
   const sortOrder = (value) => (Number.isInteger(value) && value >= 0 && value <= 10_000 ? value : 0);
 
   // ---------- Settings and branding ----------
-  app.get('/api/public-config', async (_req, res) => {
-    const { branding } = await readSettings();
-    res.json({ branding });
+  registerBranding({ app, db, requireSuper, requireCsrf, audit, fail, readSettings });
+
+  app.get('/api/config', requireSignedIn, async (req, res) => {
+    res.json(await readConfig(req.user));
   });
 
-  app.get('/api/config', requireSignedIn, async (_req, res) => {
-    res.json(await readConfig());
-  });
-
+  // One call writes every changed setting. Unknown keys and out-of-range values are refused, nothing is saved unless all are valid.
   app.put('/api/admin/settings', requireSuper, requireCsrf, async (req, res) => {
     const current = await readSettings();
-    const features = { ...current.features };
-    if (req.body?.features !== undefined) {
-      if (typeof req.body.features !== 'object' || req.body.features === null) throw fail(400, 'INVALID_SETTINGS', 'Features must be on/off switches.');
-      for (const [key, value] of Object.entries(req.body.features)) {
-        if (!(key in FEATURE_KEYS) || typeof value !== 'boolean') throw fail(400, 'INVALID_SETTINGS', `Unknown feature “${key}”.`);
-        features[key] = value;
+    let requested;
+    const next = {};
+    try {
+      requested = flattenRequest(req.body);
+      for (const [key, value] of Object.entries(requested)) {
+        const setting = SETTING_BY_KEY.get(key);
+        if (!setting) throw new SettingsError(`Unknown setting “${key}”.`);
+        next[key] = setting.type === 'object' ? mergeObject(key, current[key], value) : cleanScalar(setting, value);
       }
+      const hours = { from: next['booking.officeFrom'] ?? current.values['booking.officeFrom'], to: next['booking.officeTo'] ?? current.values['booking.officeTo'] };
+      if (hours.from >= hours.to) throw new SettingsError('The office must open before it closes.');
+    } catch (error) {
+      if (error instanceof SettingsError) throw fail(400, 'INVALID_SETTINGS', error.message);
+      throw error;
     }
-    const options = { ...current.options };
-    if (req.body?.options !== undefined) {
-      if (typeof req.body.options !== 'object' || req.body.options === null) throw fail(400, 'INVALID_SETTINGS', 'Options must be on/off switches.');
-      for (const [key, value] of Object.entries(req.body.options)) {
-        if (!(key in OPTION_KEYS) || typeof value !== 'boolean') throw fail(400, 'INVALID_SETTINGS', `Unknown option “${key}”.`);
-        options[key] = value;
-      }
-    }
-    const branding = { ...current.branding };
-    if (req.body?.branding !== undefined) {
-      const input = req.body.branding ?? {};
-      if (input.appName !== undefined) branding.appName = text(input.appName, 40, { required: true, label: 'App name' });
-      if (input.tagline !== undefined) branding.tagline = text(input.tagline, 80, { label: 'Tagline' }) ?? '';
-      if (input.welcome !== undefined) branding.welcome = text(input.welcome, 200, { label: 'Welcome note' }) ?? '';
-      if (input.accent !== undefined) {
-        if (!ACCENTS.includes(input.accent)) throw fail(400, 'INVALID_SETTINGS', 'Choose one of the listed colour themes.');
-        branding.accent = input.accent;
-      }
-    }
-    const menuChoices = { menuReviewsVisibility: current.menuReviewsVisibility, menuHistoryDays: current.menuHistoryDays };
-    if (req.body?.menuReviewsVisibility !== undefined) {
-      if (!REVIEW_VISIBILITY.includes(req.body.menuReviewsVisibility)) throw fail(400, 'INVALID_SETTINGS', 'Choose who sees menu reviews: everyone, summary or managers.');
-      menuChoices.menuReviewsVisibility = req.body.menuReviewsVisibility;
-    }
-    if (req.body?.menuHistoryDays !== undefined) {
-      if (!Number.isInteger(req.body.menuHistoryDays) || req.body.menuHistoryDays < 1 || req.body.menuHistoryDays > 90) throw fail(400, 'INVALID_SETTINGS', 'Menu history must be between 1 and 90 days.');
-      menuChoices.menuHistoryDays = req.body.menuHistoryDays;
-    }
-    const general = { usageRetentionDays: current.usageRetentionDays, homeContactsCount: current.homeContactsCount };
-    for (const [key, [min, max]] of Object.entries(GENERAL_LIMITS)) {
-      if (req.body?.[key] === undefined) continue;
-      if (!Number.isInteger(req.body[key]) || req.body[key] < min || req.body[key] > max) throw fail(400, 'INVALID_SETTINGS', key === 'usageRetentionDays' ? `Keep usage data for between ${min} and ${max} days.` : `Show between ${min} and ${max} contacts on Home.`);
-      general[key] = req.body[key];
-    }
-    // The log names what actually changed (not the whole state), so it stays short and useful.
+    // The audit log names every change with its before and after, so a bad edit can be traced and undone.
     const changes = [];
-    for (const [key, on] of Object.entries(features)) if (on !== current.features[key]) changes.push(`${key} ${on ? 'on' : 'off'}`);
-    for (const [key, on] of Object.entries(options)) if (on !== current.options[key]) changes.push(`${key} ${on ? 'on' : 'off'}`);
-    for (const key of Object.keys(branding)) if (branding[key] !== current.branding[key]) changes.push(`branding ${key}`);
-    for (const key of Object.keys(menuChoices)) if (menuChoices[key] !== current[key]) changes.push(`${key} = ${menuChoices[key]}`);
-    for (const key of Object.keys(general)) if (general[key] !== current[key]) changes.push(`${key} = ${general[key]}`);
+    for (const [key, value] of Object.entries(next)) {
+      if (OBJECT_KEYS.includes(key)) {
+        for (const field of Object.keys(value)) {
+          if (JSON.stringify(value[field]) !== JSON.stringify(current[key]?.[field])) changes.push(`${key}.${field}: ${describeValue(current[key]?.[field])} -> ${describeValue(value[field])}`);
+        }
+      } else if (value !== current.values[key]) changes.push(`${key}: ${describeValue(current.values[key])} -> ${describeValue(value)}`);
+    }
     const version = await db.tx(async (tx) => {
-      await tx.query("INSERT INTO app_settings (key, value) VALUES ('general_settings', $1) ON CONFLICT (key) DO UPDATE SET value = excluded.value", [JSON.stringify(general)]);
-      await tx.query("INSERT INTO app_settings (key, value) VALUES ('features', $1) ON CONFLICT (key) DO UPDATE SET value = excluded.value", [JSON.stringify(features)]);
-      await tx.query("INSERT INTO app_settings (key, value) VALUES ('branding', $1) ON CONFLICT (key) DO UPDATE SET value = excluded.value", [JSON.stringify(branding)]);
-      await tx.query("INSERT INTO app_settings (key, value) VALUES ('options', $1) ON CONFLICT (key) DO UPDATE SET value = excluded.value", [JSON.stringify(options)]);
-      await tx.query("INSERT INTO app_settings (key, value) VALUES ('menu_settings', $1) ON CONFLICT (key) DO UPDATE SET value = excluded.value", [JSON.stringify(menuChoices)]);
-      // The audit call also bumps the config version, which is what tells every open tab to reload its settings.
-      return audit(tx, req.user.id, 'settings.updated', null, changes.join(', ') || 'no changes');
+      const row = (await tx.query("SELECT value FROM app_settings WHERE key = 'settings_v2' FOR UPDATE")).rows[0];
+      const stored = { ...(row?.value ?? {}), ...next };
+      await tx.query("INSERT INTO app_settings (key, value) VALUES ('settings_v2', $1) ON CONFLICT (key) DO UPDATE SET value = excluded.value", [JSON.stringify(stored)]);
+      for (const change of (changes.length ? changes : ['no changes']).slice(0, 25)) {
+        await tx.query('INSERT INTO audit_log (id, actor_id, action, entity_id, detail) VALUES ($1,$2,$3,$4,$5)', [randomUUID(), req.user.id, 'settings.updated', null, change.slice(0, 300)]);
+      }
+      return bumpConfigVersion(tx);
     });
     // A shorter menu history takes effect straight away instead of at the next daily cleanup.
-    if (menuChoices.menuHistoryDays !== current.menuHistoryDays) await menu.maybeCleanup(menuChoices);
+    const fresh = await readSettings();
+    if (fresh.menuHistoryDays !== current.menuHistoryDays) await menu.maybeCleanup(fresh);
+    const { values, ...rest } = fresh;
     res.set('X-Config-Version', String(version));
-    res.json({ features, branding, options, ...menuChoices, ...general, configVersion: version });
+    res.json({ ...rest, settings: values, configVersion: version });
   });
 
   // ---------- My profile ----------

@@ -1,17 +1,16 @@
 ﻿import { useState } from 'react';
 import { AVATARS, type User } from '../../lib/types';
 import { api, messageOf } from '../../lib/api';
-import { applyTheme, getAccentChoice, getMode, setAccentChoice, setMode, type ThemeMode } from '../../lib/theme';
+import { getMode, setMode, type ThemeMode } from '../../lib/theme';
 import { summarize } from '../../lib/permissions';
 import type { Ctx } from '../App';
 import { Avatar, Field, Icon, Switch, useKit } from '../kit';
 import { NotificationPrefs } from './NotificationPrefs';
 
-interface Props { ctx?: Ctx; user?: User; forced?: boolean; onChanged: () => void; onSignOut: () => void }
+interface Props { ctx?: Ctx; user?: User; forced?: boolean; minLength?: number; onChanged: () => void; onSignOut: () => void }
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-const ACCENT_LABELS: Record<string, string> = { green: 'Forest', ocean: 'Ocean', sunset: 'Sunset', berry: 'Berry', mono: 'Ink' };
 
-export function AccountScreen({ ctx, user: userProp, forced = false, onChanged, onSignOut }: Props) {
+export function AccountScreen({ ctx, user: userProp, forced = false, minLength: forcedMin, onChanged, onSignOut }: Props) {
   const { toast, celebrate } = useKit();
   const user = (ctx?.user ?? userProp) as User;
   const [current, setCurrent] = useState('');
@@ -20,7 +19,7 @@ export function AccountScreen({ ctx, user: userProp, forced = false, onChanged, 
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [mode, setModeState] = useState<ThemeMode>(getMode());
-  const [accent, setAccentState] = useState(getAccentChoice());
+  const minLength = Number(ctx?.config.settings['security.passwordMinLength'] ?? forcedMin ?? 10);
   const [month, setMonth] = useState(user.birthMonth ?? 0);
   const [day, setDay] = useState(user.birthDay ?? 0);
 
@@ -35,7 +34,7 @@ export function AccountScreen({ ctx, user: userProp, forced = false, onChanged, 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     setError('');
-    if (next.length < 10) return setError('Use at least 10 characters.');
+    if (next.length < minLength) return setError(`Use at least ${minLength} characters.`);
     if (next !== confirm) return setError('The new passwords don’t match.');
     setBusy(true);
     try {
@@ -52,7 +51,7 @@ export function AccountScreen({ ctx, user: userProp, forced = false, onChanged, 
       {forced && <div className="banner banner-fun"><Icon name="key" size={18} /> Welcome, {user.name.split(' ')[0]}! Pick a new password to continue.</div>}
       <h2>{forced ? 'Set your password' : 'Change password'}</h2>
       <Field label="Current password"><input type="password" autoComplete="current-password" value={current} onChange={(e) => setCurrent(e.target.value)} required /></Field>
-      <Field label="New password" hint="At least 10 characters."><input type="password" autoComplete="new-password" value={next} onChange={(e) => setNext(e.target.value)} required minLength={10} /></Field>
+      <Field label="New password" hint={`At least ${minLength} characters.`}><input type="password" autoComplete="new-password" value={next} onChange={(e) => setNext(e.target.value)} required minLength={minLength} /></Field>
       <Field label="Repeat new password"><input type="password" autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} required /></Field>
       {error && <div className="form-error" role="alert">{error}</div>}
       <button className="button button-primary" disabled={busy}>{busy ? 'Saving…' : 'Update password'}</button>
@@ -61,7 +60,6 @@ export function AccountScreen({ ctx, user: userProp, forced = false, onChanged, 
 
   if (forced || !ctx) return <div className="login"><div className="login-card wide">{form}<button className="text-link" onClick={onSignOut}>Sign out</button></div></div>;
 
-  const defaultAccent = ctx.config.branding.accent;
   const maxDay = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][(month || 1) - 1];
 
   return (
@@ -81,14 +79,10 @@ export function AccountScreen({ ctx, user: userProp, forced = false, onChanged, 
             <strong className="mini-label">Look and feel</strong>
             <div className="segmented">
               {([['auto', 'Auto', 'sun'], ['light', 'Light', 'sun'], ['dark', 'Dark', 'moon']] as [ThemeMode, string, string][]).map(([id, label, icon]) => (
-                <button key={id} className={mode === id ? 'active' : ''} onClick={() => { setMode(id, defaultAccent); setModeState(id); }}><Icon name={icon} size={16} /> {label}</button>
+                <button key={id} className={mode === id ? 'active' : ''} onClick={() => { setMode(id); setModeState(id); }}><Icon name={icon} size={16} /> {label}</button>
               ))}
             </div>
-            <div className="accent-row" role="group" aria-label="Colour theme">
-              {['default', ...ctx.config.accents].map((id) => (
-                <button key={id} className={`accent-swatch ${accent === id ? 'on' : ''}`} data-accent={id === 'default' ? defaultAccent : id} onClick={() => { setAccentChoice(id, defaultAccent); setAccentState(id); applyTheme(defaultAccent); }} aria-label={id === 'default' ? 'Office default colour' : ACCENT_LABELS[id]} title={id === 'default' ? 'Office default' : ACCENT_LABELS[id]}><i /></button>
-              ))}
-            </div>
+            <small className="muted">Colours are chosen for everyone by the app owner. You pick light, dark or follow your device.</small>
           </div>
           {ctx.flag('celebrations') && (
             <div>

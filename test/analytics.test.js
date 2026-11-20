@@ -353,9 +353,10 @@ test('settings: usage retention and the Home contact count are validated, stored
   assert.equal(saved.status, 200);
   const config = (await getJson(root, '/bootstrap')).config;
   assert.deepEqual([config.usageRetentionDays, config.homeContactsCount, config.options.homeContacts, config.options.usageAnalytics], [120, 3, false, true]);
-  const log = await getJson(root, '/admin/audit?area=settings&limit=1');
-  assert.match(log.entries[0].detail, /usageRetentionDays = 120/);
-  assert.match(log.entries[0].detail, /homeContacts off/);
+  const log = await getJson(root, '/admin/audit?area=settings&limit=3');
+  const details = log.entries.map((entry) => entry.detail).join(' | ');
+  assert.match(details, /usageRetentionDays: 400 -> 120/);
+  assert.match(details, /options\.homeContacts: true -> false/);
   assert.equal((await call(root, 'PUT', '/admin/settings', { usageRetentionDays: 400, homeContactsCount: 4, options: { homeContacts: true } })).status, 200);
 });
 

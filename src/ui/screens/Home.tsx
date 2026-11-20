@@ -9,11 +9,7 @@ import { greeting, inIndia, relativeDay, timeRange, todayInIndia } from '../../l
 import type { Ctx } from '../App';
 import { Avatar, ExternalLink, Icon, Spinner, useKit } from '../kit';
 import { DietDot } from '../MenuBits';
-
-const TIPS = [
-  'Tip: zoom into the map to see every seat number.', 'Tip: tap a team colour on the map to highlight where they sit.', 'Fun fact: the first desk booked is usually the one by the window.',
-  'Tip: add your birthday in Me and settings. Cake tends to follow.', 'Tip: a quick kudos takes 20 seconds and lasts all week.', 'Tip: hold Ctrl and scroll to zoom the floor plan.', 'Tip: scan the QR on a desk to jump straight to it.',
-];
+import { getDailyTip } from '../../lib/tips';
 
 function useCountUp(target: number) {
   const [value, setValue] = useState(0);
@@ -86,7 +82,7 @@ export function HomeScreen({ ctx }: { ctx: Ctx }) {
   const hour = Number(inIndia(new Date(), { hour: '2-digit', hour12: false })) % 24;
   const nowMeal = currentMeal(hour, Number(inIndia(new Date(), { minute: '2-digit' })));
   const mealNow = menu.filter((item) => item.meal === nowMeal);
-  const tip = TIPS[Math.floor(Date.now() / 86_400_000) % TIPS.length];
+  const tip = getDailyTip();
   const visibleNews = news.filter((item) => !dismissed.includes(item.id)).slice(0, 3);
   const nextCelebrations = celebrations.slice(0, 4);
 

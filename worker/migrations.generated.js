@@ -7,6 +7,7 @@ import m005 from '../server/migrations/005-menu-v2.sql';
 import m006 from '../server/migrations/006-permissions-roles.sql';
 import m007 from '../server/migrations/007-issues-notifications.sql';
 import m008 from '../server/migrations/008-analytics-activity.sql';
+import m009 from '../server/migrations/009-event-rsvp.sql';
 
 export const MIGRATIONS = [
   { version: 1, sql: m001 },
@@ -17,4 +18,5 @@ export const MIGRATIONS = [
   { version: 6, sql: m006 },
   { version: 7, sql: m007 },
   { version: 8, sql: m008 },
+  { version: 9, sql: m009 },
 ];

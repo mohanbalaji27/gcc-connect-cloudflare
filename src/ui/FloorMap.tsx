@@ -287,7 +287,7 @@ export function FloorMap({ resources, plan, planLoading, selectedIds, onSelect, 
             const state: MapState = !showAvailability ? 'unknown' : stateOf ? stateOf(resource) : resource.available === false ? 'booked' : 'unknown';
             const dim = highlightTeamId !== undefined && highlightTeamId !== null && resource.team?.id !== highlightTeamId;
             const placement = labelPlacement.get(resource.id);
-            const labelShown = resource.type === 'room' || (placement !== undefined && mapWidth >= placement.minWidth);
+            const labelShown = true;
             const classes = ['seat-dot', resource.type === 'room' ? 'is-room' : '', state === 'booked' ? 'is-booked' : '', state === 'mine' ? 'is-mine' : '', state === 'blocked' ? 'is-blocked' : '', selected.has(resource.id) ? 'is-selected' : '', dim ? 'is-dim' : '', moving ? 'is-dragging' : ''].filter(Boolean).join(' ');
             const stateWords = state === 'booked' ? ', booked at your time' : state === 'mine' ? ', booked by you' : state === 'blocked' ? ', not available' : '';
             return (

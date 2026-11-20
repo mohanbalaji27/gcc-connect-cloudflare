@@ -20,7 +20,7 @@ export async function api<T = void>(path: string, init: { method?: string; body?
   if (method !== 'GET') headers['X-CSRF-Token'] = csrfToken;
   let response: Response;
   try {
-    response = await fetch(`/api${path}`, { method, headers, credentials: 'same-origin', cache: init.cache, body: init.body === undefined ? undefined : JSON.stringify(init.body) });
+    response = await fetch(`/api${path}`, { method, headers, credentials: 'same-origin', cache: init.cache ?? 'no-store', body: init.body === undefined ? undefined : JSON.stringify(init.body) });
   } catch {
     throw new ApiError('NETWORK', 'We could not reach the server. Check your connection and try again.', 0);
   }

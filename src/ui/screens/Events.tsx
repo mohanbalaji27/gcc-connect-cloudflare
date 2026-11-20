@@ -52,32 +52,35 @@ export function EventsScreen({ ctx }: { ctx: Ctx }) {
         <Empty icon="party" title="No events here yet">{canCreate ? 'Be the first — create one and get people together.' : 'Check back soon, something fun is always brewing.'}</Empty>
       ) : (
         <div className="event-grid">
-          {shown.map((event) => (
-            <article key={event.id} className={`event-card tone-${CATEGORY_TONE[event.category] ?? 'green'}`}>
-              <div className="event-top">
-                <div className="date-chip big"><strong>{inIndia(event.starts_at, { day: '2-digit' })}</strong><span>{inIndia(event.starts_at, { month: 'short' }).toUpperCase()}</span></div>
-                <span className="pill tone-pill">{event.category}</span>
-              </div>
-              <h3>{event.title}</h3>
-              {event.description && <p className="muted">{event.description}</p>}
-              <ul className="event-meta">
-                <li><Icon name="calendar" size={15} /> {inIndia(event.starts_at, { weekday: 'long' })}</li>
-                <li><Icon name="clock" size={15} /> {timeRange(event.starts_at, event.ends_at)}</li>
-                <li><Icon name="pin" size={15} /> {event.venue}</li>
-                <li><Icon name="users" size={15} /> {rsvpOn ? `${event.going_count} going · ` : ''}{event.audience}</li>
-              </ul>
-              {event.links.length > 0 && <div className="event-links">{event.links.map((link) => <ExternalLink key={link.url + link.label} href={link.url}><Icon name="link" size={14} /> {link.label}</ExternalLink>)}</div>}
-              <div className="event-actions">
-                {rsvpOn && (
-                  <button className={`button ${event.going ? 'button-primary' : ''}`} aria-pressed={event.going} onClick={() => void toggle(event)}>
-                    <Icon name={event.going ? 'check' : 'heart'} size={18} /> {event.going ? 'You’re going' : 'I’m going'}
-                  </button>
-                )}
-                {canEdit && <button className="icon-button" aria-label={`Edit ${event.title}`} onClick={() => setEditing(event)}><Icon name="edit" /></button>}
-                {canDelete && <button className="icon-button danger" aria-label={`Delete ${event.title}`} onClick={() => setDeleting(event)}><Icon name="trash" /></button>}
-              </div>
-            </article>
-          ))}
+          {shown.map((event) => {
+            const canRsvp = rsvpOn && event.rsvp_enabled !== false;
+            return (
+              <article key={event.id} className={`event-card tone-${CATEGORY_TONE[event.category] ?? 'green'}`}>
+                <div className="event-top">
+                  <div className="date-chip big"><strong>{inIndia(event.starts_at, { day: '2-digit' })}</strong><span>{inIndia(event.starts_at, { month: 'short' }).toUpperCase()}</span></div>
+                  <span className="pill tone-pill">{event.category}</span>
+                </div>
+                <h3>{event.title}</h3>
+                {event.description && <p className="muted">{event.description}</p>}
+                <ul className="event-meta">
+                  <li><Icon name="calendar" size={15} /> {inIndia(event.starts_at, { weekday: 'long' })}</li>
+                  <li><Icon name="clock" size={15} /> {timeRange(event.starts_at, event.ends_at)}</li>
+                  <li><Icon name="pin" size={15} /> {event.venue}</li>
+                  <li><Icon name="users" size={15} /> {canRsvp ? `${event.going_count} going · ` : ''}{event.audience}</li>
+                </ul>
+                {event.links.length > 0 && <div className="event-links">{event.links.map((link) => <ExternalLink key={link.url + link.label} href={link.url}><Icon name="link" size={14} /> {link.label}</ExternalLink>)}</div>}
+                <div className="event-actions">
+                  {canRsvp && (
+                    <button className={`button ${event.going ? 'button-primary' : ''}`} aria-pressed={event.going} onClick={() => void toggle(event)}>
+                      <Icon name={event.going ? 'check' : 'heart'} size={18} /> {event.going ? 'You’re going' : 'I’m going'}
+                    </button>
+                  )}
+                  {canEdit && <button className="icon-button" aria-label={`Edit ${event.title}`} onClick={() => setEditing(event)}><Icon name="edit" /></button>}
+                  {canDelete && <button className="icon-button danger" aria-label={`Delete ${event.title}`} onClick={() => setDeleting(event)}><Icon name="trash" /></button>}
+                </div>
+              </article>
+            );
+          })}
         </div>
       )}
       {editing && <EventForm event={editing === 'new' ? null : editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); void load(); }} />}
@@ -102,6 +105,7 @@ function EventForm({ event, onClose, onSaved }: { event: OfficeEvent | null; onC
   const [audience, setAudience] = useState(event?.audience ?? 'All employees');
   const [description, setDescription] = useState(event?.description ?? '');
   const [links, setLinks] = useState<{ label: string; url: string }[]>(event?.links ?? []);
+  const [rsvpEnabled, setRsvpEnabled] = useState(event?.rsvp_enabled ?? true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -116,7 +120,7 @@ function EventForm({ event, onClose, onSaved }: { event: OfficeEvent | null; onC
     if (badLink) return setError(badLink);
     setBusy(true);
     try {
-      const body = { title, category, venue, audience, description, startsAt: startsAt.toISOString(), endsAt: endsAt.toISOString(), links: cleanLinks };
+      const body = { title, category, venue, audience, description, startsAt: startsAt.toISOString(), endsAt: endsAt.toISOString(), links: cleanLinks, rsvp_enabled: rsvpEnabled };
       if (event) await api(`/events/${event.id}`, { method: 'PATCH', body });
       else await api('/events', { method: 'POST', body });
       toast(event ? 'Event updated.' : 'Event created — time to spread the word!', 'success');
@@ -144,6 +148,12 @@ function EventForm({ event, onClose, onSaved }: { event: OfficeEvent | null; onC
             </div>
           ))}
           {links.length < 6 && <button type="button" className="button button-small" onClick={() => setLinks([...links, { label: '', url: '' }])}><Icon name="plus" size={15} /> Add a link</button>}
+        </div>
+        <div className="span-2" style={{ marginTop: '0.25rem' }}>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.925rem', userSelect: 'none' }}>
+            <input type="checkbox" checked={rsvpEnabled} onChange={(e) => setRsvpEnabled(e.target.checked)} />
+            <span>Allow attendees to RSVP (&ldquo;I&rsquo;m going&rdquo;) for this event</span>
+          </label>
         </div>
         {error && <div className="form-error span-2" role="alert">{error}</div>}
         <div className="modal-actions span-2"><button type="button" className="button" onClick={onClose}>Cancel</button><button className="button button-primary" disabled={busy}>{busy ? 'Saving…' : event ? 'Save changes' : 'Publish event'}</button></div>

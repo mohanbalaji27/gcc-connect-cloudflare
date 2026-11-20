@@ -63,9 +63,11 @@ export function registerAnalytics({ app, db, requireAuth, requirePermission, fai
     const from60 = dayStart(addDays(today, -59));
     const trendFrom = dayStart(addDays(today, -13));
     const trendUntil = dayStart(addDays(today, 8));
-    const openFrom = new Date(todayStart.getTime() + OFFICE_HOURS.from * 3_600_000);
-    const openTo = new Date(todayStart.getTime() + OFFICE_HOURS.to * 3_600_000);
-    const openMinutes = (OFFICE_HOURS.to - OFFICE_HOURS.from) * 60;
+    // Office hours are a setting (Settings → Booking rules); the constant is only the fallback.
+    const hours = { from: settings.values?.['booking.officeFrom'] ?? OFFICE_HOURS.from, to: settings.values?.['booking.officeTo'] ?? OFFICE_HOURS.to };
+    const openFrom = new Date(todayStart.getTime() + hours.from * 3_600_000);
+    const openTo = new Date(todayStart.getTime() + hours.to * 3_600_000);
+    const openMinutes = (hours.to - hours.from) * 60;
     const { features, options } = settings;
 
     const minutes = (type) => `(SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (LEAST(b.ends_at, $4) - GREATEST(b.starts_at, $3))) / 60), 0)::float FROM bookings b JOIN resources r ON r.id = b.resource_id
@@ -128,7 +130,7 @@ export function registerAnalytics({ app, db, requireAuth, requirePermission, fai
 
     return {
       today,
-      officeHours: OFFICE_HOURS,
+      officeHours: hours,
       totals: {
         people: t.people, desks: t.desks, rooms: t.rooms, desksToday: t.desks_today, roomsToday: t.rooms_today,
         deskUtilisationToday: pct(t.desk_minutes, t.desks * openMinutes), roomUtilisationToday: pct(t.room_minutes, t.rooms * openMinutes),

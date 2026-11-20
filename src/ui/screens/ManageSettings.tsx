@@ -5,7 +5,7 @@ import { api, messageOf } from '../../lib/api';
 import type { Ctx } from '../App';
 import { Field, Switch, useKit } from '../kit';
 
-const ACCENT_LABELS: Record<string, string> = { green: 'Forest', ocean: 'Ocean', sunset: 'Sunset', berry: 'Berry', mono: 'Ink' };
+const ACCENT_LABELS: Record<string, string> = { green: 'Forest', ocean: 'Ocean', sunset: 'Sunset', berry: 'Berry', mono: 'Ink', zimmer: 'Zimmer Biomet' };
 const OPTION_HINTS: Partial<Record<OptionKey, string>> = {
   showBookerNames: 'Off by default: people only see that a seat is booked and for when. Managers who can see bookings always see names.',
   eventsRsvpEnabled: 'Turn off to hide the “I’m going” button and the going counts on events.',

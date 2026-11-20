@@ -13,7 +13,6 @@ import { registerAnalytics } from './analytics.js';
 import { registerActivity } from './activity.js';
 import { bumpConfigVersion } from './config-version.js';
 
-const SESSION_DURATION_MS = 8 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const OFFICE_TZ = 'Asia/Kolkata';
 const EVENT_CATEGORIES = ['Learning', 'Community', 'Company', 'Social', 'Wellness', 'Team'];
@@ -93,13 +92,15 @@ export function createApp(db, options = {}) {
     if (req.path.startsWith('/api/')) res.set('Cache-Control', 'no-store');
     next();
   });
+  // The logo upload carries a handful of small PNGs as base64, so that one route gets a bigger (but still bounded) body limit.
+  app.use('/api/admin/branding/logo', express.json({ limit: '1500kb', strict: true }));
   app.use(express.json({ limit: '256kb', strict: true }));
 
   const sessionCookie = (token, maxAge) =>
     `gcc_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge};${options.secureCookies ? ' Secure;' : ''}`;
-  // Anything that changes what browsers cache (settings, teams, map, floor plan, spaces) also bumps the config version,
+  // Anything that changes what browsers cache (settings, teams, map, floor plan, spaces, roles) also bumps the config version,
   // so the audit call itself is the single place that keeps clients in sync.
-  const CONFIG_ACTIONS = /^(settings|resource|team|map|floor-plan|inventory|contact)\./;
+  const CONFIG_ACTIONS = /^(settings|resource|team|map|floor-plan|inventory|contact|role)\./;
   const audit = async (client, actorId, action, entityId = null, detail = '') => {
     await client.query('INSERT INTO audit_log (id, actor_id, action, entity_id, detail) VALUES ($1,$2,$3,$4,$5)', [randomUUID(), actorId, action, entityId, String(detail).slice(0, 300)]);
     return CONFIG_ACTIONS.test(action) ? bumpConfigVersion(client) : null;
@@ -113,6 +114,7 @@ export function createApp(db, options = {}) {
   });
 
   app.use('/api', async (req, res, next) => {
+    res.set('Cache-Control', 'private, no-cache, no-store, must-revalidate');
     const token = parseCookie(req.headers.cookie, 'gcc_session');
     if (token) {
       let decoded = '';
@@ -166,29 +168,33 @@ export function createApp(db, options = {}) {
     const email = rawLogin.trim().toLowerCase();
     const password = typeof req.body?.password === 'string' ? req.body.password : '';
     if (email.length > 200 || password.length > 200) throw fail(400, 'INVALID_INPUT', 'Enter a valid email or username and password.');
+    const security = (await readSettings()).values;
+    const attempts = security['security.lockoutAttempts'];
+    const pauseMs = security['security.lockoutMinutes'] * 60 * 1000;
     const ipKey = `login-ip:${req.ip}`;
     const accountKey = `login-account:${req.ip}:${sha256(email)}`;
     const blocked = (key, maximum) => { const bucket = rateBuckets.get(key); return bucket && bucket.until > Date.now() && bucket.count >= maximum; };
-    if (blocked(ipKey, 60) || blocked(accountKey, 8)) throw fail(429, 'RATE_LIMITED', 'Too many sign-in attempts. Wait a little and try again.');
+    if (blocked(ipKey, 60) || blocked(accountKey, attempts)) throw fail(429, 'RATE_LIMITED', 'Too many sign-in attempts. Wait a little and try again.');
     const { rows } = await db.query(`SELECT e.*, COALESCE(cr.permissions, '{}') AS role_permissions, cr.name AS role_name, cr.simple_ui, cr.landing FROM employees e LEFT JOIN custom_roles cr ON cr.id = e.custom_role_id WHERE (e.email = $1 OR lower(e.username) = $1) AND e.active = TRUE LIMIT 1`, [email]);
     const employee = rows[0];
     const passwordOk = verifyPassword(password, employee?.password_hash);
     if (!employee || !passwordOk) {
       limit(ipKey, 60, 15 * 60 * 1000);
-      limit(accountKey, 8, 15 * 60 * 1000);
+      limit(accountKey, attempts, pauseMs);
       // One activity-log line when a burst of failures pauses sign-in (not one per failed try).
-      if (rateBuckets.get(accountKey)?.count === 8) await audit(db, null, 'security.login-burst', employee?.id ?? null, 'sign-in paused for 15 minutes').catch(() => {});
+      if (rateBuckets.get(accountKey)?.count === attempts) await audit(db, null, 'security.login-burst', employee?.id ?? null, `sign-in paused for ${security['security.lockoutMinutes']} minutes`).catch(() => {});
       throw fail(401, 'LOGIN_FAILED', 'Those sign-in details do not match an account.');
     }
     rateBuckets.delete(accountKey);
+    const sessionMs = security['security.sessionHours'] * 60 * 60 * 1000;
     const sessionToken = randomBytes(32).toString('base64url');
     const csrfToken = randomBytes(24).toString('base64url');
     await db.query('DELETE FROM sessions WHERE expires_at < now()');
     await db.query("DELETE FROM idempotency WHERE created_at < now() - interval '3 days'");
-    await db.query('INSERT INTO sessions (token_hash, employee_id, csrf_token, expires_at) VALUES ($1,$2,$3,$4)', [sha256(sessionToken), employee.id, csrfToken, new Date(Date.now() + SESSION_DURATION_MS)]);
+    await db.query('INSERT INTO sessions (token_hash, employee_id, csrf_token, expires_at) VALUES ($1,$2,$3,$4)', [sha256(sessionToken), employee.id, csrfToken, new Date(Date.now() + sessionMs)]);
     // Sign-ins feed "logins per day" and the Sign-ins filter of the activity log (never audit_log, so it cannot flood it).
     await analytics?.recordLogin(employee.id);
-    res.set('Set-Cookie', sessionCookie(sessionToken, SESSION_DURATION_MS / 1000));
+    res.set('Set-Cookie', sessionCookie(sessionToken, sessionMs / 1000));
     res.json({ user: userView(employee), csrfToken });
   });
 
@@ -207,7 +213,8 @@ export function createApp(db, options = {}) {
     const current = typeof req.body?.currentPassword === 'string' ? req.body.currentPassword : '';
     const next = typeof req.body?.newPassword === 'string' ? req.body.newPassword : '';
     if (!limit(`password:${req.user.id}`, 10, 15 * 60 * 1000)) throw fail(429, 'RATE_LIMITED', 'Too many attempts. Wait a little and try again.');
-    if (next.length < 10 || next.length > 128) throw fail(400, 'WEAK_PASSWORD', 'Use a password with at least 10 characters.');
+    const minLength = (await readSettings()).values['security.passwordMinLength'];
+    if (next.length < minLength || next.length > 128) throw fail(400, 'WEAK_PASSWORD', `Use a password with at least ${minLength} characters.`);
     if (next === current) throw fail(400, 'SAME_PASSWORD', 'Choose a password different from the current one.');
     const { rows } = await db.query('SELECT password_hash FROM employees WHERE id = $1', [req.user.id]);
     if (!verifyPassword(current, rows[0]?.password_hash)) throw fail(403, 'WRONG_PASSWORD', 'Your current password is not correct.');
@@ -356,8 +363,10 @@ export function createApp(db, options = {}) {
     const start = Date.parse(startsAt);
     const end = Date.parse(endsAt);
     const now = Date.now();
-    if (start < now - 60_000 || end <= start || end - start > DAY_MS || start > now + 60 * DAY_MS) {
-      throw fail(400, 'INVALID_TIME', 'Choose a valid time within the next 60 days.');
+    const rules = (await readSettings()).values;
+    const maxAdvance = rules['booking.maxAdvanceDays'];
+    if (start < now - 60_000 || end <= start || end - start > DAY_MS || start > now + maxAdvance * DAY_MS) {
+      throw fail(400, 'INVALID_TIME', `Choose a valid time within the next ${maxAdvance} days.`);
     }
     const payloadHash = sha256(JSON.stringify({ resourceId, startsAt, endsAt, token: typeof token === 'string' ? sha256(token) : null }));
     const startIso = new Date(start).toISOString();
@@ -373,7 +382,7 @@ export function createApp(db, options = {}) {
       }
       const resource = (await tx.query('SELECT * FROM resources WHERE id = $1 AND active = TRUE FOR UPDATE', [resourceId])).rows[0];
       if (!resource) throw fail(404, 'RESOURCE_NOT_FOUND', 'This space is unavailable.');
-      if (resource.type === 'room' && end - start > 8 * 60 * 60 * 1000) throw fail(400, 'DURATION_LIMIT', 'Room bookings are limited to eight hours.');
+      if (resource.type === 'room' && end - start > rules['booking.roomMaxHours'] * 60 * 60 * 1000) throw fail(400, 'DURATION_LIMIT', `Room bookings are limited to ${rules['booking.roomMaxHours']} hour${rules['booking.roomMaxHours'] === 1 ? '' : 's'}.`);
       let tokenRecord;
       if (token !== undefined) {
         if (typeof token !== 'string' || token.length < 20 || token.length > 200) throw fail(400, 'INVALID_TOKEN', 'This booking QR is invalid.');
@@ -390,7 +399,7 @@ export function createApp(db, options = {}) {
         }
       }
       const upcoming = (await tx.query("SELECT COUNT(*)::int AS count FROM bookings WHERE employee_id = $1 AND status = 'confirmed' AND ends_at > now()", [req.user.id])).rows[0].count;
-      if (upcoming >= 3) throw fail(409, 'BOOKING_QUOTA', 'You have reached the limit of three upcoming bookings.');
+      if (upcoming >= rules['booking.quotaPerPerson']) throw fail(409, 'BOOKING_QUOTA', `You have reached the limit of ${rules['booking.quotaPerPerson']} upcoming booking${rules['booking.quotaPerPerson'] === 1 ? '' : 's'}.`);
       if (resource.type === 'desk') {
         const own = (await tx.query(`
           SELECT 1 FROM bookings b JOIN resources r ON r.id = b.resource_id
@@ -486,20 +495,28 @@ export function createApp(db, options = {}) {
     const showRsvp = await rsvpsOn();
     const { rows } = await db.query(`
       SELECT ev.id, ev.title, ev.description, ev.starts_at, ev.ends_at, ev.venue, ev.category, ev.audience, ev.links,
+             COALESCE(ev.rsvp_enabled, TRUE) AS rsvp_enabled,
              (SELECT COUNT(*)::int FROM event_rsvps r WHERE r.event_id = ev.id) AS going_count,
              EXISTS (SELECT 1 FROM event_rsvps r WHERE r.event_id = ev.id AND r.employee_id = $1) AS going
       FROM events ev WHERE ev.ends_at >= now() ORDER BY ev.starts_at LIMIT 100`, [req.user.id]);
-    res.json({ rsvpEnabled: showRsvp, events: rows.map((row) => ({ ...row, going_count: showRsvp ? row.going_count : 0, going: showRsvp && Boolean(row.going) })) });
+    res.json({
+      rsvpEnabled: showRsvp,
+      events: rows.map((row) => {
+        const canRsvp = showRsvp && row.rsvp_enabled !== false;
+        return { ...row, rsvp_enabled: Boolean(row.rsvp_enabled), going_count: canRsvp ? row.going_count : 0, going: canRsvp && Boolean(row.going) };
+      }),
+    });
   });
 
   app.post('/api/events', requirePermission('events.create'), requireCsrf, async (req, res) => {
     const input = eventBody(req.body);
+    const rsvpEnabled = req.body?.rsvpEnabled !== false && req.body?.rsvp_enabled !== false;
     checkEventTimes(Date.parse(input.startsAt), Date.parse(input.endsAt));
     const id = randomUUID();
     await db.tx(async (tx) => {
       await tx.query(
-        'INSERT INTO events (id, title, description, starts_at, ends_at, venue, category, audience, created_by, links) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',
-        [id, input.title, input.description ?? '', new Date(input.startsAt), new Date(input.endsAt), input.venue, input.category, input.audience || 'All employees', req.user.id, JSON.stringify(input.links ?? [])],
+        'INSERT INTO events (id, title, description, starts_at, ends_at, venue, category, audience, created_by, links, rsvp_enabled) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)',
+        [id, input.title, input.description ?? '', new Date(input.startsAt), new Date(input.endsAt), input.venue, input.category, input.audience || 'All employees', req.user.id, JSON.stringify(input.links ?? []), rsvpEnabled],
       );
       await audit(tx, req.user.id, 'event.created', id, input.title);
     });
@@ -510,13 +527,14 @@ export function createApp(db, options = {}) {
     const existing = (await db.query('SELECT * FROM events WHERE id = $1', [req.params.id])).rows[0];
     if (!existing) throw fail(404, 'EVENT_NOT_FOUND', 'This event no longer exists.');
     const input = eventBody(req.body, true);
+    const rsvpEnabled = req.body?.rsvpEnabled !== undefined ? Boolean(req.body.rsvpEnabled) : req.body?.rsvp_enabled !== undefined ? Boolean(req.body.rsvp_enabled) : (existing.rsvp_enabled ?? true);
     const start = input.startsAt ? Date.parse(input.startsAt) : new Date(existing.starts_at).getTime();
     const end = input.endsAt ? Date.parse(input.endsAt) : new Date(existing.ends_at).getTime();
     checkEventTimes(start, end);
     await db.tx(async (tx) => {
       await tx.query(
-        'UPDATE events SET title=$2, description=$3, starts_at=$4, ends_at=$5, venue=$6, category=$7, audience=$8, links=$9 WHERE id=$1',
-        [existing.id, input.title || existing.title, input.description ?? existing.description, new Date(start), new Date(end), input.venue || existing.venue, input.category ?? existing.category, input.audience || existing.audience, JSON.stringify(input.links ?? existing.links ?? [])],
+        'UPDATE events SET title=$2, description=$3, starts_at=$4, ends_at=$5, venue=$6, category=$7, audience=$8, links=$9, rsvp_enabled=$10 WHERE id=$1',
+        [existing.id, input.title || existing.title, input.description ?? existing.description, new Date(start), new Date(end), input.venue || existing.venue, input.category ?? existing.category, input.audience || existing.audience, JSON.stringify(input.links ?? existing.links ?? []), rsvpEnabled],
       );
       await audit(tx, req.user.id, 'event.updated', existing.id, input.title || existing.title);
     });
@@ -535,8 +553,9 @@ export function createApp(db, options = {}) {
 
   app.put('/api/events/:id/rsvp', requireAuth, requireCsrf, async (req, res) => {
     if (!(await rsvpsOn())) throw fail(403, 'RSVP_DISABLED', 'RSVPs are turned off for events.');
-    const event = (await db.query('SELECT id FROM events WHERE id = $1 AND ends_at >= now()', [req.params.id])).rows[0];
+    const event = (await db.query('SELECT id, rsvp_enabled FROM events WHERE id = $1 AND ends_at >= now()', [req.params.id])).rows[0];
     if (!event) throw fail(404, 'EVENT_NOT_FOUND', 'This event is no longer open.');
+    if (event.rsvp_enabled === false) throw fail(403, 'RSVP_DISABLED', 'RSVPs are not enabled for this event.');
     await db.query('INSERT INTO event_rsvps (event_id, employee_id) VALUES ($1,$2) ON CONFLICT DO NOTHING', [event.id, req.user.id]);
     res.status(204).end();
   });
@@ -1044,7 +1063,7 @@ export function createApp(db, options = {}) {
   // The few Home contacts ride along here (they only change when an admin edits contacts, which bumps the settings version),
   // so Home needs no request of its own for them.
   app.get('/api/bootstrap', requireAuth, async (req, res) => {
-    const [config, teams, map, summary, unread] = await Promise.all([features.readConfig(), loadTeams(), loadMapInfo(), loadSummary(req.user), features.notifier.unreadCount(req.user.id)]);
+    const [config, teams, map, summary, unread] = await Promise.all([features.readConfig(req.user), loadTeams(), loadMapInfo(), loadSummary(req.user), features.notifier.unreadCount(req.user.id)]);
     const homeContacts = await features.homeContacts(config);
     res.set('Cache-Control', 'private, no-cache');
     res.json({ configVersion: req.configVersion, user: req.user, config, ...teams, map, summary, unread, homeContacts });

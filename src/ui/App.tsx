@@ -1,15 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { AppConfig, Bootstrap, Branding, FeatureKey, HomeContact, MapInfo, Summary, Team, User } from '../lib/types';
+import type { AppConfig, Bootstrap, Branding, FeatureKey, HomeContact, LoginConfig, LogoMeta, MapInfo, PublicConfig, Summary, Team, User } from '../lib/types';
 import { api, ApiError, messageOf, onConfigVersion, setCsrf } from '../lib/api';
 import { startPulse } from '../lib/pulse';
 import { resetUsage, setUsageEnabled, startUsage, track, type UsageFeature } from '../lib/usage';
 import { clearAvailability } from '../lib/availability';
 import { clearResources } from '../lib/resources';
 import { clearMenu } from '../lib/menuData';
-import { applyTheme } from '../lib/theme';
+import { applyMode, applyThemeColours, resolveTheme } from '../lib/theme';
+import { DEFAULT_BRANDING, DEFAULT_LOGIN, NO_LOGO, applyBrandingHead, fallbackConfig } from '../lib/brand';
+import { BrandMark } from './Brand';
+import { LoginScreen } from './Login';
 import { nav as navHandoff } from '../lib/nav';
 import { reloadFloorPlan, resetFloorPlan, type FloorPlanImage } from '../lib/floorplan';
-import { Avatar, Icon, KitProvider, Spinner, useKit, Field } from './kit';
+import { Avatar, Icon, KitProvider, Spinner, useKit } from './kit';
 import { HomeScreen } from './screens/Home';
 import { BookScreen } from './screens/Book';
 import { BookingsScreen } from './screens/Bookings';
@@ -30,7 +33,9 @@ import './analytics.css';
 export type Screen = 'home' | 'book' | 'bookings' | 'events' | 'scan' | 'manage' | 'account' | 'menu' | 'community' | 'useful' | 'more' | 'issues';
 export type NavItem = [Screen, string, string];
 export interface QrIntent { resourceId: string; token?: string; stay?: string; report?: boolean }
-const DEFAULT_BRANDING: Branding = { appName: 'GCC Connect', tagline: 'Your office day, sorted.', accent: 'green', welcome: '' };
+const PUBLIC_KEY = 'gcc-public-config';
+// The sign-in page paints from the last copy of the public settings straight away, then checks for a newer one.
+const rememberedPublic = (): Partial<PublicConfig> => { try { return JSON.parse(localStorage.getItem(PUBLIC_KEY) ?? '{}') as Partial<PublicConfig>; } catch { return {}; } };
 // Screens that count as one feature each. Community and Useful stuff count per tab instead (kudos, polls, links, contacts...).
 const SCREEN_FEATURE: Partial<Record<Screen, UsageFeature>> = { home: 'home', book: 'booking', bookings: 'my_bookings', events: 'events', scan: 'scan', menu: 'menu', issues: 'issues', account: 'account', manage: 'manage', more: 'more' };
 
@@ -74,7 +79,10 @@ function Shell() {
   const [online, setOnline] = useState(navigator.onLine);
   const [updateReady, setUpdateReady] = useState(false);
   const [config, setConfig] = useState<AppConfig | null>(null);
-  const [branding, setBranding] = useState<Branding>(DEFAULT_BRANDING);
+  const [branding, setBranding] = useState<Branding>(() => ({ ...DEFAULT_BRANDING, ...rememberedPublic().branding }));
+  const [loginConfig, setLoginConfig] = useState<LoginConfig>(() => ({ ...DEFAULT_LOGIN, ...rememberedPublic().login }));
+  const [logo, setLogo] = useState<LogoMeta>(() => ({ ...NO_LOGO, ...rememberedPublic().logo }));
+  const [minLength, setMinLength] = useState<number>(() => rememberedPublic().passwordMinLength ?? 10);
   const [configVersion, setConfigVersion] = useState(0);
   const [unread, setUnread] = useState(0);
   const [homeContacts, setHomeContacts] = useState<HomeContact[]>([]);
@@ -103,7 +111,7 @@ function Shell() {
     knownVersion.current = boot.configVersion;
     setConfigVersion(boot.configVersion);
     slice('user', boot.user, setUser);
-    slice('config', boot.config, (next) => { setConfig(next); setBranding(next.branding); clearMenu(); });
+    slice('config', boot.config, (next) => { setConfig(next); setBranding(next.branding); setLoginConfig(next.login); setLogo(next.logo); clearMenu(); });
     slice('teams', { teams: boot.teams, unassigned: boot.unassignedSeats }, (next) => { setTeams(next.teams); setUnassignedSeats(next.unassigned); });
     slice('map', boot.map, setMapInfo);
     slice('homeContacts', boot.homeContacts ?? [], setHomeContacts);
@@ -137,17 +145,21 @@ function Shell() {
       .then((session) => { setCsrf(session.csrfToken ?? ''); setUser(session.user); })
       .catch(() => setUser(null))
       .finally(() => setBooting(false));
-    api<{ branding: Branding }>('/public-config').then((result) => setBranding(result.branding)).catch(() => {});
+    api<PublicConfig>('/public-config').then((result) => {
+      setBranding(result.branding); setLoginConfig(result.login); setLogo(result.logo); setMinLength(result.passwordMinLength);
+      try { localStorage.setItem(PUBLIC_KEY, JSON.stringify(result)); } catch { /* private mode */ }
+    }).catch(() => {});
   }, []);
 
+  // The colours belong to the super admin's theme; people only choose light, dark or follow their device.
+  const theme = useMemo(() => resolveTheme(branding), [branding]);
+  useEffect(() => { applyThemeColours(theme); }, [theme]);
+  useEffect(() => { applyBrandingHead(branding, logo); }, [branding, logo]);
   useEffect(() => {
-    applyTheme(branding.accent);
-    document.title = branding.appName;
     const query = window.matchMedia('(prefers-color-scheme: dark)');
-    const listener = () => applyTheme(branding.accent);
-    query.addEventListener('change', listener);
-    return () => query.removeEventListener('change', listener);
-  }, [branding]);
+    query.addEventListener('change', applyMode);
+    return () => query.removeEventListener('change', applyMode);
+  }, []);
 
   useEffect(() => {
     const up = () => setOnline(true);
@@ -171,7 +183,7 @@ function Shell() {
   useEffect(() => {
     if (!ready) return undefined;
     void reloadBootstrap().catch(() => {
-      setConfig((current) => current ?? { features: { links: true, contacts: true, menu: true, announcements: true, issues: true, kudos: false, polls: true, celebrations: true, feedback: true, whosin: true, vibes: true }, branding: DEFAULT_BRANDING, options: { showBookerNames: false, eventsRsvpEnabled: true, issuePhotosEnabled: true, homeContacts: true, usageAnalytics: true }, featureCatalog: {} as AppConfig['featureCatalog'], optionCatalog: {} as AppConfig['optionCatalog'], accents: ['green', 'ocean', 'sunset', 'berry', 'mono'], menuReviewsVisibility: 'summary', menuHistoryDays: 7, usageRetentionDays: 400, homeContactsCount: 4, permissionCatalog: { groups: [], adminDefaults: [] }, notificationCatalog: { channels: [], types: [] } });
+      setConfig((current) => current ?? fallbackConfig());
     });
     // Any response that reports a newer settings version, and the periodic pulse, both end up here.
     const noticed = (version: number) => { if (knownVersion.current > 0 && version !== knownVersion.current) void reloadBootstrap().catch(() => {}); };
@@ -261,8 +273,8 @@ function Shell() {
   );
 
   if (booting) return <div className="boot"><Spinner label="Warming up" /></div>;
-  if (!user) return <LoginScreen branding={branding} onSignedIn={(next) => setUser(next)} />;
-  if (user.mustChangePassword) return <AccountScreen user={user} forced onChanged={() => setUser({ ...user, mustChangePassword: false })} onSignOut={signOut} />;
+  if (!user) return <LoginScreen branding={branding} login={loginConfig} logo={logo} onSignedIn={(next) => setUser(next)} />;
+  if (user.mustChangePassword) return <AccountScreen user={user} forced minLength={minLength} onChanged={() => setUser({ ...user, mustChangePassword: false })} onSignOut={signOut} />;
   if (!ctx) return <div className="boot"><Spinner label="Getting things ready" /></div>;
 
   const manager = manageTabs(user).length > 0;
@@ -295,9 +307,6 @@ function Shell() {
     hasIssues ? ['issues', 'Report', 'wrench'] : hasCommunity ? ['community', 'Community', 'heart'] : ['bookings', 'Trips', 'ticket'], ['more', 'More', 'grid'],
   ];
   const allowed = (id: Screen) => id === 'account' || id === 'more' || nav.some(([item]) => item === id);
-  const brandParts = branding.appName.trim().split(' ');
-  const brandLast = brandParts.length > 1 ? brandParts.pop() : '';
-  const brand = <span>{brandParts.join(' ')}{brandLast ? <> <b>{brandLast}</b></> : null}</span>;
   const roleLabel = user.role === 'super_admin' ? 'Super admin' : user.roleName ?? (user.role === 'admin' ? 'Admin' : user.team || 'Employee');
   const mobileActive = (id: Screen) => screen === id || (id === 'more' && !mobileNav.some(([m]) => m === screen));
 
@@ -306,7 +315,7 @@ function Shell() {
       <a className="skip-link" href="#main">Skip to content</a>
       <aside className="sidebar">
         <div className="sidebar-top">
-          <div className="brand"><span className="brand-mark"><Icon name="sparkle" size={20} /></span>{brand}</div>
+          <div className="brand" data-align={branding.logoAlign}><BrandMark branding={branding} logo={logo} place="bar" /></div>
           <NotificationBell unread={unread} onClick={openBell} />
         </div>
         <nav aria-label="Primary">
@@ -324,7 +333,7 @@ function Shell() {
       </aside>
       <div className="content-column">
         <header className="topbar">
-          <div className="brand compact"><span className="brand-mark"><Icon name="sparkle" size={18} /></span>{brand}</div>
+          <div className="brand compact" data-align={branding.logoAlign}><BrandMark branding={branding} logo={logo} place="bar" height={Math.min(branding.logoHeight, 32)} /></div>
           <div className="topbar-right">
             {!online && <span className="pill pill-warn">Offline</span>}
             <NotificationBell unread={unread} onClick={openBell} />
@@ -364,67 +373,6 @@ function Shell() {
           </button>
         ))}
       </nav>
-    </div>
-  );
-}
-
-function LoginScreen({ branding, onSignedIn }: { branding: Branding; onSignedIn: (user: User) => void }) {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
-  const demo = import.meta.env.DEV;
-
-  async function submit(event: React.FormEvent) {
-    event.preventDefault();
-    setBusy(true);
-    setError('');
-    try {
-      const result = await api<{ user: User; csrfToken: string }>('/login', { method: 'POST', body: { login: email.trim(), password } });
-      setCsrf(result.csrfToken);
-      onSignedIn(result.user);
-    } catch (reason) {
-      setError(messageOf(reason));
-    } finally {
-      setBusy(false);
-    }
-  }
-  const fill = (e: string) => { setEmail(e); setPassword('gccdemo'); };
-  const [lead, ...rest] = branding.tagline.split(',');
-
-  return (
-    <div className="login">
-      <div className="login-art" aria-hidden="true">
-        <div className="blob blob-a" /><div className="blob blob-b" /><div className="blob blob-c" />
-        <div className="login-copy">
-          <span className="brand-mark big"><Icon name="sparkle" size={28} /></span>
-          <h1>{rest.length ? <>{lead}, <em>{rest.join(',').trim()}</em></> : <>{branding.tagline || branding.appName}</>}</h1>
-          <p>{branding.welcome || 'Find a desk, grab a room, catch an event, and say hi to the people who make the place feel like home.'}</p>
-          <ul><li><Icon name="check" size={16} /> Real floor plan, live availability</li><li><Icon name="check" size={16} /> One tap to book, one scan to find</li><li><Icon name="check" size={16} /> Events, food, kudos and fun</li></ul>
-        </div>
-      </div>
-      <form className="login-card" onSubmit={submit}>
-        <h2>Welcome back</h2>
-        <p className="muted">Sign in to {branding.appName}.</p>
-        <Field label="Email or username"><input type="text" inputMode="email" autoCapitalize="off" autoCorrect="off" spellCheck={false} autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} required autoFocus placeholder="you@company.com or your employee ID" maxLength={200} /></Field>
-        <Field label="Password"><input type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required /></Field>
-        {error && <div className="form-error" role="alert">{error}</div>}
-        <button className="button button-primary button-block" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'} <Icon name="arrow" size={18} /></button>
-        {demo && (
-          <div className="demo-box">
-            <strong>Local demo accounts</strong>
-            <div className="demo-row">
-              <button type="button" className="chip" onClick={() => fill('ava@demo.gcc')}>Employee</button>
-              <button type="button" className="chip" onClick={() => fill('noah@demo.gcc')}>Admin</button>
-              <button type="button" className="chip" onClick={() => fill('root@demo.gcc')}>Super admin</button>
-              <button type="button" className="chip" onClick={() => fill('meera@demo.gcc')}>Facility manager</button>
-              <button type="button" className="chip" onClick={() => fill('ravi@demo.gcc')}>Facility staff</button>
-              <button type="button" className="chip" onClick={() => fill('emp-1001')}>Staff (employee ID)</button>
-            </div>
-            <small>Password for all of them: <code>gccdemo</code></small>
-          </div>
-        )}
-      </form>
     </div>
   );
 }

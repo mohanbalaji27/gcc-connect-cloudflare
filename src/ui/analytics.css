@@ -64,8 +64,8 @@
 .feature-bar { height: 8px; border-radius: 999px; background: var(--green-soft); margin-top: 5px; overflow: hidden; }
 .feature-bar i { display: block; height: 100%; background: var(--green); border-radius: 999px; transition: width .5s ease; }
 .trend { font-size: .8rem; font-weight: 700; white-space: nowrap; }
-.trend.up { color: #17683f; }
-.trend.down { color: #a32b2b; }
+.trend.up { color: var(--success-ink); }
+.trend.down { color: var(--danger-ink); }
 .trend.flat { color: var(--ink-soft); }
 .unused-row { margin: 6px 0 0; }
 .unused-row .chip.static { font-size: .84rem; padding: 5px 12px; }
@@ -75,7 +75,7 @@
 .filter-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; position: relative; }
 .filter-dates { grid-column: 1 / -1; }
 .filter-label { font-size: .78rem; font-weight: 700; color: var(--ink-soft); letter-spacing: .02em; }
-.filter-field input, .filter-field select { width: 100%; padding: 9px 12px; border-radius: 12px; border: 1px solid #d3dccf; background: var(--card); color: var(--ink); min-height: 40px; }
+.filter-field input, .filter-field select { width: 100%; padding: 9px 12px; border-radius: 12px; border: 1px solid var(--line-strong); background: var(--card); color: var(--ink); min-height: 40px; }
 .filter-field input:focus-visible, .filter-field select:focus-visible { outline: 3px solid var(--blue); outline-offset: 1px; }
 .filter-dates .custom-range { margin: 8px 0 0; }
 .filter-summary { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px; min-height: 28px; }
@@ -122,23 +122,19 @@
 .pin-pill { margin-left: 8px; vertical-align: middle; }
 
 /* ---------- Dark mode ---------- */
-:root[data-theme="dark"] .info-text, :root[data-theme="dark"] .privacy-note, :root[data-theme="dark"] .hc-item { background: #1d3629; }
-:root[data-theme="dark"][data-accent="ocean"] .info-text, :root[data-theme="dark"][data-accent="ocean"] .privacy-note, :root[data-theme="dark"][data-accent="ocean"] .hc-item { background: #12293b; }
-:root[data-theme="dark"][data-accent="sunset"] .info-text, :root[data-theme="dark"][data-accent="sunset"] .privacy-note, :root[data-theme="dark"][data-accent="sunset"] .hc-item { background: #3a1f15; }
-:root[data-theme="dark"][data-accent="berry"] .info-text, :root[data-theme="dark"][data-accent="berry"] .privacy-note, :root[data-theme="dark"][data-accent="berry"] .hc-item { background: #351a2b; }
-:root[data-theme="dark"][data-accent="mono"] .info-text, :root[data-theme="dark"][data-accent="mono"] .privacy-note, :root[data-theme="dark"][data-accent="mono"] .hc-item { background: #262e2b; }
-:root[data-theme="dark"] .hc-emoji { background: #101b16; }
+:root[data-theme="dark"] .info-text, :root[data-theme="dark"] .privacy-note, :root[data-theme="dark"] .hc-item { background: var(--primary-soft); }
+:root[data-theme="dark"] .hc-emoji { background: var(--inset); }
 :root[data-theme="dark"] .info-btn { border-color: var(--ink-soft); color: var(--ink); }
 :root[data-theme="dark"] .info-btn:hover, :root[data-theme="dark"] .info-btn.on { background: var(--green); border-color: var(--green); color: #fff; }
-:root[data-theme="dark"] .filter-field input, :root[data-theme="dark"] .filter-field select { background: #101b16; border-color: #2c4337; }
+:root[data-theme="dark"] .filter-field input, :root[data-theme="dark"] .filter-field select { background: var(--inset); border-color: var(--line-strong); }
 :root[data-theme="dark"] .person-list button { color: var(--ink); }
-:root[data-theme="dark"] .trend.up { color: #8be0b0; }
-:root[data-theme="dark"] .trend.down { color: #f0a8a8; }
-:root[data-theme="dark"] .field-error { color: #ff9c9c; }
+:root[data-theme="dark"] .trend.up { color: var(--success-ink); }
+:root[data-theme="dark"] .trend.down { color: var(--danger-ink); }
+:root[data-theme="dark"] .field-error { color: var(--danger-ink); }
 :root[data-theme="dark"] .activity-item.area-issues { border-left-color: #e0b94a; }
 :root[data-theme="dark"] .lc-bar { opacity: .7; }
 :root[data-theme="dark"] .lc-bar.on { opacity: 1; }
-:root[data-theme="dark"] .hc-actions .button:not(.button-primary) { background: #101b16; border-color: #2c4337; color: var(--ink); }
+:root[data-theme="dark"] .hc-actions .button:not(.button-primary) { background: var(--inset); border-color: var(--line-strong); color: var(--ink); }
 
 @media (max-width: 640px) {
   .activity-item { grid-template-columns: 1fr; }
